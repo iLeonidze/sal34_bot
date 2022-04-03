@@ -1,0 +1,6 @@
+google-api-python-client
+google-auth-oauthlib
+oauth2client
+python-telegram-bot
+emoji
+telethon
