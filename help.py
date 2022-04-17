@@ -37,6 +37,7 @@ class HelpAssistant:
             # TODO: send to proper admin chat for building
             return context.bot.send_message(
                 chat_id=-1001198401765,
+                parse_mode='MarkdownV2',
                 text=f"Неизвестный запрос ассистенту от {user.get_linked_fullname()}:\n`{query_text}`"
             )
         elif response.get('response'):
