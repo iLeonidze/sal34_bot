@@ -1120,8 +1120,9 @@ def bot_command_start(update: Update, context: CallbackContext):
 
 
 def proceed_private_dialog(update: Update, context: CallbackContext):
-    context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='?')
+    pass
+    # context.bot.send_message(chat_id=update.effective_chat.id,
+    #                          text='?')
 
 
 def form_objects_list_string(user: User) -> str:
