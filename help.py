@@ -25,7 +25,7 @@ class HelpAssistant:
             raise Exception('Help file is invalid!')
 
         for query in db_raw.get('db'):
-            for i, substrings_raw in query.get('query'):
+            for i, substrings_raw in enumerate(query.get('query')):
                 query['query'][i] = substrings_raw.split('|')
             self.db.append(query)
 
@@ -33,13 +33,14 @@ class HelpAssistant:
         query_text = update.message.text.lower().replace('бот,', '').strip()
         response = self.proceed_query(query_text)
 
-        if not response:
+        if response is None:
             # bot failed to find something
             pass
-        if response.get('message'):
+        elif response.get('response'):
             return context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=response['message']
+                text=response['response'],
+                reply_to_message_id=update.message.message_id
             )
         elif response.get('forward'):
             return context.bot.forward_message(
