@@ -33,6 +33,8 @@ from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContacts
     AddContactRequest
 from telethon.tl.types import InputPhoneContact
 
+from help import HelpAssistant
+
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -90,6 +92,8 @@ OBJECT_TYPES_NAMES = {
 TABLES_RELOADED_TIME = time.time()
 LAST_STALED_USER_CACHE = time.time()
 QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
+
+HELP_ASSISTANT = HelpAssistant()
 
 
 def get_default_context():
@@ -2065,6 +2069,15 @@ def stats_collector(update: Update, context: CallbackContext):
 
     return False
 
+def bot_assistant_call(update: Update, context: CallbackContext):
+    user = USERS_CACHE.get_user(update)
+
+    if not user.is_identified():
+        return
+
+    if update.message.text.lower()[:4] == 'бот,':
+        HELP_ASSISTANT.proceed_request(update, context)
+
 
 def no_command_handler(update: Update, context: CallbackContext) -> None:
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
@@ -2535,6 +2548,8 @@ def handle_button_callback(update: Update, context: CallbackContext) -> None:
 def setup_command_handlers(tg_dispatcher):
 
     tg_dispatcher.add_handler(MessageHandler(Filters.all, stats_collector), group=-1)
+
+    tg_dispatcher.add_handler(MessageHandler(Filters.all, bot_assistant_call), group=-2)
 
     start_handler = CommandHandler('start', bot_command_start)
     tg_dispatcher.add_handler(start_handler)
