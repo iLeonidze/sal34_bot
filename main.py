@@ -1042,7 +1042,7 @@ def proceed_users_context_save():
 
 
 def bot_send_message_user_not_authorized(update: Update, context: CallbackContext):
-    text = f'{update.effective_user.name}, у Вас нет прав доступа чтобы пользоваться мной'
+    text = f'{update.effective_user.name}, Вы должны быть зарегистрированы чтобы воспользоваться мною. Напишите администраторам @iLeonidze или @Foeniculum'
     context.bot.send_message(chat_id=update.effective_chat.id,
                              text=text,
                              reply_to_message_id=update.message.message_id)
@@ -2075,7 +2075,7 @@ def bot_assistant_call(update: Update, context: CallbackContext):
     if not user.is_identified():
         return
 
-    if update.message.text.lower()[:4] == 'бот,':
+    if update.message.text.lower()[:4] == 'бот,' or update.message.chat.type == 'private':
         HELP_ASSISTANT.proceed_request(update, context)
 
 
