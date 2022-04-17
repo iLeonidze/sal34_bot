@@ -7,6 +7,8 @@ import yaml
 from telegram import Update
 from telegram.ext import CallbackContext
 
+from main import User
+
 help_file_path = './help.yaml'
 
 
@@ -29,13 +31,16 @@ class HelpAssistant:
                 query['query'][i] = substrings_raw.split('|')
             self.db.append(query)
 
-    def proceed_request(self, update: Update, context: CallbackContext):
+    def proceed_request(self, update: Update, context: CallbackContext, user: User):
         query_text = update.message.text.lower().replace('бот,', '').strip()
         response = self.proceed_query(query_text)
 
         if response is None:
-            # bot failed to find something
-            pass
+            # TODO: send to proper admin chat for building
+            return context.bot.send_message(
+                chat_id=-1001198401765,
+                text=f"Неизвестный запрос ассистенту от {user.get_linked_fullname()}:\n`{query_text}`"
+            )
         elif response.get('response'):
             return context.bot.send_message(
                 chat_id=update.effective_chat.id,

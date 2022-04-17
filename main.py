@@ -2070,6 +2070,7 @@ def stats_collector(update: Update, context: CallbackContext):
 
     return False
 
+
 def bot_assistant_call(update: Update, context: CallbackContext):
     user = USERS_CACHE.get_user(update)
 
@@ -2077,7 +2078,7 @@ def bot_assistant_call(update: Update, context: CallbackContext):
         return
 
     if update.message.text.lower()[:4] == 'бот,' or update.message.chat.type == 'private':
-        HELP_ASSISTANT.proceed_request(update, context)
+        HELP_ASSISTANT.proceed_request(update, context, user)
 
 
 def no_command_handler(update: Update, context: CallbackContext) -> None:
