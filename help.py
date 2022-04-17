@@ -7,8 +7,6 @@ import yaml
 from telegram import Update
 from telegram.ext import CallbackContext
 
-from main import User
-
 help_file_path = './help.yaml'
 
 
@@ -31,7 +29,7 @@ class HelpAssistant:
                 query['query'][i] = substrings_raw.split('|')
             self.db.append(query)
 
-    def proceed_request(self, update: Update, context: CallbackContext, user: User):
+    def proceed_request(self, update: Update, context: CallbackContext, user):
         query_text = update.message.text.lower().replace('бот,', '').strip()
         response = self.proceed_query(query_text)
 
