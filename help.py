@@ -25,7 +25,7 @@ class HelpAssistant:
         # 4. Response Body
         # 5. Response Test Queries
         for row in rows:
-            if row[1].lower() == 'готов' and row[2] != '' and (row[3] != '' or row[4] != ''):
+            if len(row) == 6 and row[1].lower() == 'готов' and row[2] != '' and (row[3] != '' or row[4] != ''):
                 entry = {
                     'query': re.compile(row[2].strip())
                 }
