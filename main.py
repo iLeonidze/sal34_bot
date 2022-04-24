@@ -93,7 +93,7 @@ TABLES_RELOADED_TIME = time.time()
 LAST_STALED_USER_CACHE = time.time()
 QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
 
-HELP_ASSISTANT = HelpAssistant()
+HELP_ASSISTANT = None
 
 
 def get_default_context():
@@ -888,8 +888,10 @@ def reload_tables():
         service = build('sheets', 'v4', credentials=GOOGLE_CREDENTIALS)
 
         for building_number, building_table in DB.items():
-            spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['id']
-            spreadsheet_range = CONFIGS['buildings'][building_number]['spreadsheet']['range']
+
+            # PEOPLE
+            spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['people']['id']
+            spreadsheet_range = CONFIGS['buildings'][building_number]['spreadsheet']['people']['range']
 
             sheet = service.spreadsheets()
             result = sheet.values().get(spreadsheetId=spreadsheet_id,
@@ -897,10 +899,26 @@ def reload_tables():
             rows = result.get('values', [])
 
             if not rows:
-                print('Syncing tables error: No data')
+                print('Syncing tables error PEOPLE: No data')
                 return
 
             DB[building_number] = pd.DataFrame(rows, columns=DF_COLUMNS)
+
+            # ASSISTANT
+            spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['assistant']['id']
+            spreadsheet_range = CONFIGS['buildings'][building_number]['spreadsheet']['assistant']['range']
+
+            sheet = service.spreadsheets()
+            result = sheet.values().get(spreadsheetId=spreadsheet_id,
+                                        range=spreadsheet_range).execute()
+            rows = result.get('values', [])
+
+            if not rows:
+                print('Syncing tables error ASSISTANT: No data')
+                return
+
+            global HELP_ASSISTANT
+            HELP_ASSISTANT = HelpAssistant(rows)
 
             print(f'  {building_number} synced')
 

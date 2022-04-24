@@ -11,10 +11,34 @@ help_file_path = './help.yaml'
 
 
 class HelpAssistant:
-    def __init__(self):
+    def __init__(self, rows):
 
         self.db = []
+        self.load_from_table(rows)
 
+    def load_from_table(self, rows):
+        # Columns:
+        # 0. Name
+        # 1. Status
+        # 2. Request Body
+        # 3. Forward
+        # 4. Response Body
+        # 5. Response Test Queries
+        for row in rows:
+            if row[1].lower() == 'готов' and row[2] != '' and (row[3] != '' or row[4] != ''):
+                entry = {
+                    'query': re.compile(row[2].strip())
+                }
+                if row[3] != '':
+                    entry['forward'] = row[3].strip().split('/')
+                else:
+                    entry['response'] = row[4].strip()
+
+                self.db.append(entry)
+
+        print(f'Loaded {len(self.db)} assistant entries')
+
+    def load_from_file_v1(self):
         if not os.path.isfile(help_file_path):
             raise Exception('Help file "help.yaml" is not exists!')
 
@@ -31,7 +55,7 @@ class HelpAssistant:
 
     def proceed_request(self, update: Update, context: CallbackContext, user):
         query_text = update.message.text.lower().replace('бот,', '').strip()
-        response = self.proceed_query(query_text)
+        response = self.proceed_query_v2(query_text)
 
         if response is None:
             # TODO: send to proper admin chat for building
@@ -53,7 +77,7 @@ class HelpAssistant:
                 response['forward'][1]
             )
 
-    def proceed_query(self, query_text: str) -> Dict or None:
+    def proceed_query_v1(self, query_text: str) -> Dict or None:
         response = None
 
         for query in self.db:
@@ -72,5 +96,15 @@ class HelpAssistant:
 
             if not sub_strings_failed:
                 return query
+
+        return response
+
+    def proceed_query_v2(self, query_text: str) -> Dict or None:
+        response = None
+
+        for entry in self.db:
+            match = entry['query'].search(query_text)
+            if match is not None:
+                return entry
 
         return response
