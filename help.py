@@ -35,6 +35,7 @@ class HelpAssistant:
                     entry['response'] = row[4].strip()
 
                 self.db.append(entry)
+                print(f"Loaded \"{row[0]}\" entry")
 
         print(f'Loaded {len(self.db)} assistant entries')
 
