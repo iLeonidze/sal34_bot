@@ -33,7 +33,7 @@ from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContacts
     AddContactRequest
 from telethon.tl.types import InputPhoneContact
 
-from help import HelpAssistant
+from help import HelpAssistant, is_bot_assistant_request
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -459,7 +459,7 @@ class User:
                 result.append(obj['number'])
         return result
 
-    def _get_neighbors(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> DataFrame:
+    def _get_neighbours(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> DataFrame:
         if not building:
             building = self.building
 
@@ -473,29 +473,29 @@ class User:
                 continue
             filtered_user_objects.append(obj)
 
-        all_neighbors = None
+        all_neighbours = None
 
         for obj in filtered_user_objects:
             table = DB[building]
             section_table = table[(table['entrance'] == obj['section_raw']) & (table['object_type'] == obj['type'])]
 
-            # neighbors from same floor
-            neighbors_from_floor = section_table[section_table['floor'] == str(obj['floor'])]
-            neighbors_bottom = section_table[(section_table['floor'] == str(obj['floor']-1)) & (section_table['floor_position'] == str(obj['floor_position']))]
-            neighbors_top = section_table[(section_table['floor'] == str(obj['floor']+1)) & (section_table['floor_position'] == str(obj['floor_position']))]
+            # neighbours from same floor
+            neighbours_from_floor = section_table[section_table['floor'] == str(obj['floor'])]
+            neighbours_bottom = section_table[(section_table['floor'] == str(obj['floor']-1)) & (section_table['floor_position'] == str(obj['floor_position']))]
+            neighbours_top = section_table[(section_table['floor'] == str(obj['floor']+1)) & (section_table['floor_position'] == str(obj['floor_position']))]
 
-            obj_neighbors = neighbors_from_floor.append(neighbors_bottom).append(neighbors_top)
+            obj_neighbours = neighbours_from_floor.append(neighbours_bottom).append(neighbours_top)
 
-            if all_neighbors is None:
-                all_neighbors = obj_neighbors
+            if all_neighbours is None:
+                all_neighbours = obj_neighbours
             else:
-                all_neighbors = all_neighbors.append(obj_neighbors)
+                all_neighbours = all_neighbours.append(obj_neighbours)
 
-        return all_neighbors
+        return all_neighbours
 
-    def get_neighbors(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
-        neighbors_table = self._get_neighbors(building, section, number, object_type)
-        return rebuild_neighbors_dict_from_table(neighbors_table)
+    def get_neighbours(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
+        neighbours_table = self._get_neighbours(building, section, number, object_type)
+        return rebuild_neighbours_dict_from_table(neighbours_table)
 
     def is_added_to_group(self, group_id: int) -> bool:
         return is_user_added_to_groups(self.telegram_id, [group_id])
@@ -534,21 +534,21 @@ def is_user_added_to_groups(telegram_id: int, groups_ids: List[int]) -> bool:
     return True
 
 
-def rebuild_neighbors_dict_from_table(table: DataFrame) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
+def rebuild_neighbours_dict_from_table(table: DataFrame) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
     table = table.sort_values(by=['number'], ascending=True)
 
-    neighbors = {}
+    neighbours = {}
 
     # этаж -> объект -> {"type", "users": [["",""] или User]}
 
     for index, row in table.iterrows():
         floor = row['floor']
-        if not neighbors.get(floor):
-            neighbors[floor] = {}
+        if not neighbours.get(floor):
+            neighbours[floor] = {}
 
         obj_number = int(row['number'])
-        if not neighbors[floor].get(obj_number):
-            neighbors[floor][obj_number] = {
+        if not neighbours[floor].get(obj_number):
+            neighbours[floor][obj_number] = {
                 'type': row['object_type'],
                 'users': []
             }
@@ -557,19 +557,19 @@ def rebuild_neighbors_dict_from_table(table: DataFrame) -> Dict[str, Dict[str, D
             user = USERS_CACHE.get_user(int(row['telegram']))
         else:
             user = [encode_markdown(row['name']), encode_markdown(row['surname'])]
-        neighbors[floor][obj_number]['users'].append(user)
+        neighbours[floor][obj_number]['users'].append(user)
 
     # Do not show absent users in results
-    for floor_number, floor_objs in neighbors.items():
+    for floor_number, floor_objs in neighbours.items():
         for obj_number, obj in floor_objs.items():
             only_users = []
             for user in obj['users']:
                 if isinstance(user, User):
                     only_users.append(user)
             if only_users:
-                neighbors[floor_number][obj_number]['users'] = only_users
+                neighbours[floor_number][obj_number]['users'] = only_users
 
-    return neighbors
+    return neighbours
 
 
 def encode_markdown(string: str):
@@ -664,7 +664,7 @@ class UsersCache:
 
                 LAST_STALED_USER_CACHE = time.time()
 
-    def _get_neighbors_from_section(self, building: str, section: str = None) -> DataFrame:
+    def _get_neighbours_from_section(self, building: str, section: str = None) -> DataFrame:
         table = DB[building]
 
         if not section:
@@ -677,15 +677,15 @@ class UsersCache:
             obj_type = 'мм'
 
         if obj_type == 'кв':
-            neighbors_table = table[(table['object_type'] == obj_type) & (table['entrance'] == section)]
+            neighbours_table = table[(table['object_type'] == obj_type) & (table['entrance'] == section)]
         else:
-            neighbors_table = table[(table['object_type'] == obj_type)]
+            neighbours_table = table[(table['object_type'] == obj_type)]
 
-        return neighbors_table
+        return neighbours_table
 
-    def get_neighbors_from_section(self, building: str, section: str = None) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
-        neighbors_table = self._get_neighbors_from_section(building, section)
-        return rebuild_neighbors_dict_from_table(neighbors_table)
+    def get_neighbours_from_section(self, building: str, section: str = None) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
+        neighbours_table = self._get_neighbours_from_section(building, section)
+        return rebuild_neighbours_dict_from_table(neighbours_table)
 
 
 USERS_CACHE = UsersCache()
@@ -1228,13 +1228,13 @@ def get_short_object_type_str_by_id(object_type_id: str):
         return 'кв'
 
 
-def get_neighbors_list_str(neighbors: Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]],
+def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]],
                            private: bool = False,
                            show_objects: bool = False,
                            split_floors: bool = False) -> str:
     text = ''
 
-    for floor_number, objects in neighbors.items():
+    for floor_number, objects in neighbours.items():
 
         if split_floors:
             text += f'\n\n*{floor_number} этаж*'
@@ -1275,7 +1275,7 @@ def get_neighbors_list_str(neighbors: Dict[str, Dict[str, Dict[str, Any[str, Lis
     return text
 
 
-def bot_command_neighbors(update: Update, context: CallbackContext):
+def bot_command_neighbours(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = \
         identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
@@ -1291,11 +1291,11 @@ def bot_command_neighbors(update: Update, context: CallbackContext):
     if is_admin_chat:
         if update.message.reply_to_message:
             requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_from.id)
-            neighbors = requested_user.get_neighbors()
+            neighbours = requested_user.get_neighbours()
         else:
-            neighbors = USERS_CACHE.get_neighbors_from_section(chat_building)
+            neighbours = USERS_CACHE.get_neighbours_from_section(chat_building)
 
-        text = get_neighbors_list_str(neighbors,
+        text = get_neighbours_list_str(neighbours,
                                       private=True,
                                       show_objects=True,
                                       split_floors=True)
@@ -1303,10 +1303,10 @@ def bot_command_neighbors(update: Update, context: CallbackContext):
         is_private = update.effective_chat.type == 'private'
         if update.message.reply_to_message:
             requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_from.id)
-            neighbors = requested_user.get_neighbors()
-            if neighbors:
+            neighbours = requested_user.get_neighbours()
+            if neighbours:
                 text = f'{requested_user.get_linked_shortname()} имеет ближайших соседей:\n' \
-                       + get_neighbors_list_str(neighbors, private=is_private)
+                       + get_neighbours_list_str(neighbours, private=is_private)
             else:
                 text = f'{requested_user.get_linked_shortname()} не имеет соседей рядом'
         else:
@@ -1314,24 +1314,24 @@ def bot_command_neighbors(update: Update, context: CallbackContext):
                 text = 'Используйте эту команду в чате секции или в приватной беседе, ' \
                        'здесь её использовать нельзя'
             else:
-                neighbors = this_user.get_neighbors()
-                if neighbors:
+                neighbours = this_user.get_neighbours()
+                if neighbours:
                     text = 'Ваши ближайшие соседи:\n' \
-                           + get_neighbors_list_str(neighbors, private=is_private, show_objects=True)
+                           + get_neighbours_list_str(neighbours, private=is_private, show_objects=True)
                 else:
                     text = 'К сожалению, у Вас еще нет соседей рядом'
     else:
         if update.message.reply_to_message:
             requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_from.id)
-            neighbors = requested_user.get_neighbors(section=chat_section)
-            if neighbors:
+            neighbours = requested_user.get_neighbours(section=chat_section)
+            if neighbours:
                 text = f'{requested_user.get_linked_shortname()} имеет ближайших соседей:\n' \
-                       + get_neighbors_list_str(neighbors, private=False, show_objects=True)
+                       + get_neighbours_list_str(neighbours, private=False, show_objects=True)
             else:
                 text = f'{requested_user.get_linked_shortname()} не имеет соседей рядом'
         else:
-            neighbors = USERS_CACHE.get_neighbors_from_section(chat_building, chat_section)
-            text = get_neighbors_list_str(neighbors,
+            neighbours = USERS_CACHE.get_neighbours_from_section(chat_building, chat_section)
+            text = get_neighbours_list_str(neighbours,
                                           private=False,
                                           show_objects=True,
                                           split_floors=True)
@@ -1525,7 +1525,7 @@ def bot_command_stats(update: Update, context: CallbackContext):
             percent = math.floor(amount / object_type_max * 100)
             text += f'\n• {object_type}: {str(amount)} / {str(object_type_max)} ({str(percent)}%)'
 
-        text += '\n\nКоличество жителей квартир по секциям:'
+        text += '\n\nКоличество добавленных квартир по секциям:'
         for number, value in objects[objects['object_type'] == 'кв'].groupby(by="entrance").size().iteritems():
             text += f'\n{number} секция: {value}'
 
@@ -1548,11 +1548,11 @@ def bot_command_stats(update: Update, context: CallbackContext):
                     f'\n- Последнее исполнение очереди: {int(time.time() - QUEUED_ACTIONS_LAST_EXECUTED_TIME)} сек. назад'
 
     else:
-        neighbors_table = table[(table['entrance'] == chat_section) & (table['added_to_group'] == 'YES') & (table['object_type'] == 'кв')][['number', 'floor']].drop_duplicates()
-        text += f'Всего квартир {chat_section}-й секции в этом чате: {len(neighbors_table.index)}'
+        neighbours_table = table[(table['entrance'] == chat_section) & (table['added_to_group'] == 'YES') & (table['object_type'] == 'кв')][['number', 'floor']].drop_duplicates()
+        text += f'Всего квартир {chat_section}-й секции в этом чате: {len(neighbours_table.index)}'
 
         text += f'\n\nКвартир в чате по каждому этажу:'
-        size_columns = neighbors_table.groupby(by="floor").size()
+        size_columns = neighbours_table.groupby(by="floor").size()
         size_columns.index = size_columns.index.astype(int)
         for floor_number, value in size_columns.sort_index().iteritems():
             if floor_number != -1:
@@ -1605,7 +1605,7 @@ def bot_command_help(update: Update, context: CallbackContext):
 
     commands = [
         ['help', 'Выводит этот список команд с подсказками'],
-        ['neighbors', 'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно\\. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете \\(в общем чате это не работает\\)'],
+        ['neighbours', 'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно\\. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете \\(в общем чате это не работает\\)'],
         ['who', 'Узнать информацию о соседе или о себе\nНеобходимо вызывать эту команду ответив на чье\\-то сообщение, информацию о котором Вы хотите узнать\\. Вызов в общем чате покажет из какой секции, вызов в секции покажет с какого этажа и номер объекта недвижимости\\. Если вызвать команду без реплая, то будет выведена информация о Вас\\.'],
         ['stats', 'Общая статистика по дому или секции\nВ общем чате показывает сколько соседей добавлено в базу, в чате секции показывает количество жильцов на каждом этаже'],
     ]
@@ -2095,7 +2095,7 @@ def bot_assistant_call(update: Update, context: CallbackContext):
     if not user.is_identified():
         return
 
-    if update.message.text.lower()[:4] == 'бот,' or update.message.chat.type == 'private':
+    if is_bot_assistant_request(update):
         HELP_ASSISTANT.proceed_request(update, context, user)
 
 
@@ -2574,7 +2574,7 @@ def setup_command_handlers(tg_dispatcher):
     start_handler = CommandHandler('start', bot_command_start)
     tg_dispatcher.add_handler(start_handler)
 
-    who_handler = CommandHandler('neighbors', bot_command_neighbors)
+    who_handler = CommandHandler('neighbours', bot_command_neighbours)
     tg_dispatcher.add_handler(who_handler)
 
     who_handler = CommandHandler('who', bot_command_who_is_this)
