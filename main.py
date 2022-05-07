@@ -605,8 +605,11 @@ class UsersCache:
         else:
             incoming_user_id = int(incoming_user_update)
 
-        if self.users.get(incoming_user_id):
-            return self.users[incoming_user_id]
+        # TODO: temporary solution - disabled caches and force reloading
+        # if self.users.get(incoming_user_id):
+        #     return self.users[incoming_user_id]
+        USERS_CACHE.evict()
+        reload_tables()
 
         user = User(incoming_user_id, self)
         if user.is_identified():
@@ -1612,7 +1615,7 @@ def bot_command_help(update: Update, context: CallbackContext):
 
     admin_commands = [
         ['who', 'Выводит всю информацию о человеке по одному из заданных параметров:\n\\- Сообщение\n\\- Форвард сообщения\n\\- Контакт\n\\- Username\n\\- Номер телефона\n\\- Номер телефона вне нашей базы\n\\- ID телеграма'],
-        ['evict\\_caches', 'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы \\(это действие высвободит память, но может привести к снижению производительности бота\\)'],
+        ['reload', 'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы \\(это действие высвободит память, но может привести к снижению производительности бота\\)'],
         # ['reload\\_db', 'Вызывает принудительную синхронизацию всех таблиц БД'],
         ['start\\_tables\\_sync', 'Начинает синхронизацию таблиц БД'],
         ['stop\\_tables\\_sync', 'Останавливает синхронизацию таблиц БД'],
@@ -1666,7 +1669,7 @@ def bot_command_reload_db(update: Update, context: CallbackContext):
                              reply_to_message_id=update.message.message_id)
 
 
-def bot_command_evict_caches(update: Update, context: CallbackContext):
+def bot_command_reload(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
@@ -2588,7 +2591,7 @@ def setup_command_handlers(tg_dispatcher):
 
     # Admin commands
 
-    reload_db_handler = CommandHandler('evict_caches', bot_command_evict_caches)
+    reload_db_handler = CommandHandler('reload', bot_command_reload)
     tg_dispatcher.add_handler(reload_db_handler)
 
     # reload_db_handler = CommandHandler('reload_db', bot_command_reload_db)
