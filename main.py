@@ -212,14 +212,21 @@ class User:
                 table = DB[row['building']]
 
                 if row['object_type'] == 'мм':
-                    section_id = 'p'
+                    obj_type = 'p'
+                    section_id = obj_type
                 elif row['object_type'] == 'кл':
-                    section_id = 's'
+                    obj_type = 's'
+                    section_id = obj_type
                 else:
                     section_id = row['entrance']
+                    obj_type = 'f'
 
-                self.from_sections.append(section_id)
-                    
+                self.from_sections.append({
+                    'type': obj_type,
+                    'number': int(row['entrance']),
+                    'id': section_id
+                })
+
                 self.objects.append({
                     'building': row['building'],
                     'floor': int(row['floor']),
@@ -241,7 +248,7 @@ class User:
                     related_users_df = related_users_df.append(related_users_found_df)
                 # TODO: building correct objects from rows
 
-            self.from_sections = list(set(self.from_sections))
+            self.from_sections = self.from_sections
             self.related_users_objects = related_users_df
 
             self.load_context()
@@ -374,10 +381,9 @@ class User:
 
     def get_related_chats(self) -> List[Dict]:
         chats = []
-        sections = self.from_sections
 
-        for section in sections:
-            chat = get_chat_for_section_building(self.building, section)
+        for section in self.from_sections:
+            chat = get_chat_for_section_building(self.building, section['id'])
             chats.append(chat)
 
         for chat in CONFIGS['buildings'][self.building]['groups']:
@@ -1460,27 +1466,47 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
     if not is_admin_chat:
 
         if chat_section is None:
-            effective_sections = []
-            for section in requested_user.from_sections:
-                if section != 'p' or len(requested_user.from_sections) == 1:
-                    effective_sections.append(section)
 
-            if len(effective_sections) == 1:
-                if effective_sections[0] == 'p':
+            if len(requested_user.from_sections) == 1:
+                if requested_user.from_sections[0]['type'] == 'p':
                     text = f'{text} с паркинга'
+                elif requested_user.from_sections[0]['type'] == 's':
+                    text = f'{text} из кладовок {requested_user.from_sections[0]["number"]}\\-й секции'
                 else:
-                    text = f'{text} из {effective_sections[0]}\\-й секции'
+                    text = f'{text} из {requested_user.from_sections[0]["number"]}\\-й секции'
+
             else:
-                sections_strs = []
-                for section in effective_sections:
-                    if section == 'p':
-                        sections_strs.append('паркинга')
-                    elif section == 's':
-                        continue
+                is_parking_found = False
+                is_storage_found = False
+                is_flat_found = False
+                for section in requested_user.from_sections:
+                    if section['type'] == 'p':
+                        is_parking_found = True
+                    if section['type'] == 's':
+                        is_storage_found = True
+                    if section['type'] == 'f':
+                        is_flat_found = True
+
+                if not is_flat_found:
+                    if is_parking_found and is_storage_found:
+                        # TODO: show storages number
+                        text = f'{text} из паркинга и кладовок'
+                    elif is_parking_found:
+                        text = f'{text} из паркинга'
                     else:
-                        sections_strs.append(f'{section}\\-й секции')
-                sections_str_joined = "\\, ".join(sections_strs)
-                text = f'{text} из {sections_str_joined}'
+                        # TODO: show storages number
+                        text = f'{text} из кладовок'
+                else:
+                    sections_strs = []
+                    for section in requested_user.from_sections:
+                        if section['id'] == 'p':
+                            sections_strs.append('паркинга')
+                        elif section['id'] == 's':
+                            sections_strs.append(f'кладовок в {section["number"]}\\-й секции')
+                        else:
+                            sections_strs.append(f'{section["number"]}\\-й секции')
+                    sections_str_joined = "\\, ".join(list(set(sections_strs)))
+                    text = f'{text} из {sections_str_joined}'
 
         else:
             object_type_str = 'Квартира'
