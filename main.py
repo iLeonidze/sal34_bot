@@ -89,7 +89,7 @@ OBJECT_TYPES_NAMES = {
     'нж': 'Помещение',
 }
 
-TABLES_RELOADED_TIME = time.time()
+TABLES_RELOADED_TIME = 0
 LAST_STALED_USER_CACHE = time.time()
 QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
 
@@ -556,7 +556,8 @@ def rebuild_neighbours_dict_from_table(table: DataFrame) -> Dict[str, Dict[str, 
         if not neighbours[floor].get(obj_number):
             neighbours[floor][obj_number] = {
                 'type': row['object_type'],
-                'users': []
+                'users': [],
+                'position': int(row['floor_position'])
             }
 
         if row['telegram'] != '':
@@ -890,6 +891,9 @@ def connect_google_service():
 
 def reload_tables():
     global TABLES_RELOADED_TIME
+
+    if time.time()-TABLES_RELOADED_TIME < 10:
+        return
 
     print('Reloading tables...')
 
@@ -1257,16 +1261,17 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                     else:
                         user_str = user.get_linked_seminame() + ' тел\\. \\' + user.get_public_phone()
                 else:
+                    user_str = '✖️ '
                     if not private:
                         if len(user) > 1 and len(user[1]) > 0:
-                            user_str = user[0] + ' ' + user[1][0] + '\\.'
+                            user_str += user[0] + ' ' + user[1][0] + '\\.'
                         else:
-                            user_str = user[0]
+                            user_str += user[0]
                     else:
                         if len(user) > 1 and len(user[1]) > 0:
-                            user_str = user[0] + ' ' + user[1]
+                            user_str += user[0] + ' ' + user[1]
                         else:
-                            user_str = user[0]
+                            user_str += user[0]
 
                 users_strs.append(user_str)
 
@@ -1277,7 +1282,7 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                 text += f'{floor_number} этаж, '
 
             if show_objects:
-                text += f'{object_number} {get_short_object_type_str_by_id(object_description["type"])}: '
+                text += f'{object_number} \\({object_description["position"]}\\) {get_short_object_type_str_by_id(object_description["type"])}: '
 
             text += "; ".join(users_strs)
 
