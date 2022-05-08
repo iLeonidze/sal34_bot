@@ -1261,7 +1261,7 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                     else:
                         user_str = user.get_linked_seminame() + ' тел\\. \\' + user.get_public_phone()
                 else:
-                    user_str = '✖️ '
+                    user_str = '[нет] '
                     if not private:
                         if len(user) > 1 and len(user[1]) > 0:
                             user_str += user[0] + ' ' + user[1][0] + '\\.'
