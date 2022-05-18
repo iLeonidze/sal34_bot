@@ -390,7 +390,7 @@ class User:
             if chat['name'] in ['private_common_group', 'public_info_channel']:
                 chats.append(chat)
 
-        return list({v['name']:v for v in chats}.values())
+        return list({v['id']:v for v in chats}.values())
 
     def get_related_chats_ids(self) -> List[int]:
         chats_ids = []
