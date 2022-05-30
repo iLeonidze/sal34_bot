@@ -1561,7 +1561,8 @@ def bot_command_stats(update: Update, context: CallbackContext):
 
         text += '\n\nКоличество добавленных квартир по секциям:'
         for number, value in objects[objects['object_type'] == 'кв'].groupby(by="entrance").size().iteritems():
-            section_max = len(table[['object_type', 'number', 'entrance']][objects['entrance'] == number].drop_duplicates().index)
+            tb_flats = table[table['object_type'] == 'кв']
+            section_max = len(tb_flats[tb_flats['entrance'] == number][['object_type', 'number', 'entrance']].drop_duplicates().index)
             section_percent = math.floor(value / section_max * 100)
             text += f'\n{number} секция: {value} / {str(section_max)} ({str(section_percent)}%)'
 
