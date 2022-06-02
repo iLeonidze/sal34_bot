@@ -1246,6 +1246,7 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                            show_objects: bool = False,
                            split_floors: bool = False) -> str:
     text = ''
+    lines = 0
 
     for floor_number, objects in neighbours.items():
 
@@ -1261,7 +1262,7 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                     else:
                         user_str = user.get_linked_seminame() + ' тел\\. \\' + user.get_public_phone()
                 else:
-                    user_str = '[нет] '
+                    user_str = '~~'
                     if not private:
                         if len(user) > 1 and len(user[1]) > 0:
                             user_str += user[0] + ' ' + user[1][0] + '\\.'
@@ -1272,6 +1273,7 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                             user_str += user[0] + ' ' + user[1]
                         else:
                             user_str += user[0]
+                    user_str += '~~'
 
                 users_strs.append(user_str)
 
@@ -1285,6 +1287,11 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                 text += f'{object_number} \\({object_description["position"]}\\) {get_short_object_type_str_by_id(object_description["type"])}: '
 
             text += "; ".join(users_strs)
+
+            lines += 1
+            if lines > 100:
+                text += 'XXX_SPLITTER_XXX'
+                lines = 0
 
     return text
 
@@ -1350,12 +1357,12 @@ def bot_command_neighbours(update: Update, context: CallbackContext):
                                           show_objects=True,
                                           split_floors=True)
 
-    print(text)
-    context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=text,
-                             reply_to_message_id=update.message.message_id,
-                             disable_notification=True,
-                             parse_mode='MarkdownV2')
+    for text_part in text.split('XXX_SPLITTER_XXX'):
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=text_part,
+                                 reply_to_message_id=update.message.message_id,
+                                 disable_notification=True,
+                                 parse_mode='MarkdownV2')
 
 
 def bot_command_who_is_this(update: Update, context: CallbackContext):
