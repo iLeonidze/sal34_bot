@@ -746,31 +746,33 @@ async def _tg_client_remove_user_from_contacts(client: TelegramClient, tg_id):
 
 
 async def _tg_client_get_guest_id_via_phone(phone: str) -> int or None:
-    loop = asyncio.new_event_loop()
+    return None
 
-    client_api_id = CONFIGS['service']['identity']['telegram']['client_api_id']
-    client_api_hash = CONFIGS['service']['identity']['telegram']['client_api_hash']
-
-    client: TelegramClient = TelegramClient('sal34_bot_client',
-                                            client_api_id,
-                                            client_api_hash,
-                                            loop=loop)
-
-    async with client:
-        import_result = await _tg_client_add_user_to_contacts(client, phone=phone)
-
-        if len(import_result.imported) == 0:
-            print('Nothing imported!')
-            return None
-
-        print('Loading user info...')
-        user_id = await _tg_client_get_entity_id(phone)
-
-        if not USERS_CACHE.get_user(user_id).has_any_object():
-            print('Removing contact...')
-            await _tg_client_remove_user_from_contacts(client, import_result.users[0])
-
-        return user_id
+    # loop = asyncio.new_event_loop()
+    #
+    # client_api_id = CONFIGS['service']['identity']['telegram']['client_api_id']
+    # client_api_hash = CONFIGS['service']['identity']['telegram']['client_api_hash']
+    #
+    # client: TelegramClient = TelegramClient('sal34_bot_client',
+    #                                         client_api_id,
+    #                                         client_api_hash,
+    #                                         loop=loop)
+    #
+    # async with client:
+    #     import_result = await _tg_client_add_user_to_contacts(client, phone=phone)
+    #
+    #     if len(import_result.imported) == 0:
+    #         print('Nothing imported!')
+    #         return None
+    #
+    #     print('Loading user info...')
+    #     user_id = await _tg_client_get_entity_id(phone)
+    #
+    #     if not USERS_CACHE.get_user(user_id).has_any_object():
+    #         print('Removing contact...')
+    #         await _tg_client_remove_user_from_contacts(client, import_result.users[0])
+    #
+    #     return user_id
 
 
 async def _tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
@@ -786,15 +788,15 @@ async def _tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
 
     async with client:
 
-        try:
-            await _tg_client_add_user_to_contacts(client,
-                                                  phone=user.phone['number'],
-                                                  user=user,
-                                                  name=user.person['name'] + ' 34',
-                                                  surname=user.person.get('surname', ''))
-        except Exception as e:
-            print('Failed to add user to contacts')
-            print(e)
+        # try:
+        #     await _tg_client_add_user_to_contacts(client,
+        #                                           phone=user.phone['number'],
+        #                                           user=user,
+        #                                           name=user.person['name'] + ' 34',
+        #                                           surname=user.person.get('surname', ''))
+        # except Exception as e:
+        #     print('Failed to add user to contacts')
+        #     print(e)
 
         await client(InviteToChannelRequest(
             channel_id,
@@ -1262,7 +1264,7 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                     else:
                         user_str = user.get_linked_seminame() + ' тел\\. \\' + user.get_public_phone()
                 else:
-                    user_str = '~~'
+                    user_str = 'нет '
                     if not private:
                         if len(user) > 1 and len(user[1]) > 0:
                             user_str += user[0] + ' ' + user[1][0] + '\\.'
