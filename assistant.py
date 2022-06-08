@@ -13,8 +13,8 @@ help_file_path = './help.yaml'
 
 def is_bot_assistant_request(update: Update) -> bool:
     return update.message.text[0] != '/' and \
-           (update.message.text.lower()[:4] == 'бот,' or \
-            update.message.chat.type == 'private' or \
+           (update.message.text.lower()[:4] == 'бот,' or
+            update.message.chat.type == 'private' or
             is_activation_phrase(update))
 
 
@@ -104,6 +104,9 @@ class HelpAssistant:
                 else:
                     entry['response'] = row[4].strip()
 
+                entry['name'] = row[0].strip()
+                entry['test_queries'] = row[5].strip().split('\n')
+
                 self.db.append(entry)
                 print(f"Loaded \"{row[0]}\" entry")
 
@@ -124,17 +127,22 @@ class HelpAssistant:
                 query['query'][i] = substrings_raw.split('|')
             self.db.append(query)
 
-    def proceed_request(self, update: Update, context: CallbackContext, user):
+    def proceed_request(self, update: Update, context: CallbackContext, user, building_chats):
         query_text = update.message.text.lower().replace('бот,', '').strip()
         response = self.proceed_query_v2(query_text)
 
         if response is None:
-            # TODO: send to proper admin chat for building
-            return context.bot.send_message(
-                chat_id=-1001198401765,
-                parse_mode='MarkdownV2',
-                text=f"Неизвестный запрос ассистенту от {user.get_linked_fullname()}:\n`{query_text}`"
-            )
+            admin_chat = None
+            for chat in building_chats:
+                if chat['name'] == 'admin':
+                    admin_chat = chat['id']
+                    break
+            if admin_chat is not None:
+                return context.bot.send_message(
+                    chat_id=admin_chat,
+                    parse_mode='MarkdownV2',
+                    text=f"Неизвестный запрос ассистенту от {user.get_linked_fullname()}:\n`{query_text}`"
+                )
         elif response.get('response'):
             return context.bot.send_message(
                 chat_id=update.effective_chat.id,

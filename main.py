@@ -33,7 +33,7 @@ from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContacts
     AddContactRequest
 from telethon.tl.types import InputPhoneContact
 
-from help import HelpAssistant, is_bot_assistant_request
+from assistant import HelpAssistant, is_bot_assistant_request
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -404,7 +404,19 @@ class User:
             return
 
         if not self.is_added_to_group(chat_id):
-            tg_client_add_user_to_channel(chat_id, self)
+
+            chats = self.get_related_chats()
+            for chat in chats:
+
+                if chat['id'] != chat_id:
+                    continue
+
+                if chat['name'] == 'public_info_channel':
+                    tg_client_send_invite_to_public_channel(chat['invite_address'], self)
+                else:
+                    tg_client_add_user_to_channel(chat_id, self)
+
+                break
 
         if save and is_common_group_chat(self.building, chat_id):
             self.update_table_value('added_to_group', 'YES')
@@ -497,6 +509,8 @@ class User:
             else:
                 all_neighbours = all_neighbours.append(obj_neighbours)
 
+        all_neighbours.number = all_neighbours.number.astype(int)
+
         return all_neighbours
 
     def get_neighbours(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
@@ -541,6 +555,7 @@ def is_user_added_to_groups(telegram_id: int, groups_ids: List[int]) -> bool:
 
 
 def rebuild_neighbours_dict_from_table(table: DataFrame) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
+    table.number = table.number.astype(int)
     table = table.sort_values(by=['number'], ascending=True)
 
     neighbours = {}
@@ -804,8 +819,30 @@ async def _tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
         ))
 
 
+async def _tg_client_send_message_to_user(message: str, user: User) -> None:
+    loop = asyncio.new_event_loop()
+
+    client_api_id = CONFIGS['service']['identity']['telegram']['client_api_id']
+    client_api_hash = CONFIGS['service']['identity']['telegram']['client_api_hash']
+
+    client: TelegramClient = TelegramClient('sal34_bot_client',
+                                            client_api_id,
+                                            client_api_hash,
+                                            loop=loop)
+
+    async with client:
+        await client.send_message(user.telegram_id, message)
+
+
 def tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
     asyncio.run(_tg_client_add_user_to_channel(channel_id, user))
+
+
+
+def tg_client_send_invite_to_public_channel(invite_address, user: User) -> None:
+    message = 'Обязательно подписывайтесь на инфо канал с важными новостями дома:\n' + invite_address
+
+    asyncio.run(_tg_client_send_message_to_user(message, user))
 
 
 def tg_bot_delete_user_from_channel(channel_id: int, user_id: int) -> None:
@@ -947,7 +984,7 @@ def update_table(building: str or int, values: List[List[str, str or int]]):
     pass
 
 
-def identify_chat_by_tg_update(update: Update) -> (bool, str, bool, str):
+def identify_chat_by_tg_update(update: Update) -> (bool, str, bool, str, list or None):
     incoming_chat_id = update.effective_chat.id
 
     is_found = False
@@ -955,6 +992,7 @@ def identify_chat_by_tg_update(update: Update) -> (bool, str, bool, str):
     is_admin_chat = False
     chat_name = None
     chat_section = None
+    building_chats = None
 
     for building_number, building_config in CONFIGS['buildings'].items():
         if is_found:
@@ -964,6 +1002,8 @@ def identify_chat_by_tg_update(update: Update) -> (bool, str, bool, str):
             if group['id'] == incoming_chat_id:
                 is_found = True
                 found_building_number = building_number
+                building_chats = building_config['groups']
+
                 chat_name = group['name']
                 
                 if group.get('section'):
@@ -974,7 +1014,7 @@ def identify_chat_by_tg_update(update: Update) -> (bool, str, bool, str):
 
                 break
 
-    return is_found, found_building_number, is_admin_chat, chat_name, chat_section
+    return is_found, found_building_number, is_admin_chat, chat_name, chat_section, building_chats
 
 
 def start_tables_sync():
@@ -1253,7 +1293,8 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
     for floor_number, objects in neighbours.items():
 
         if split_floors:
-            text += f'\n\n*{floor_number} этаж*'
+            if floor_number != '-1' or len(neighbours) != 1:
+                text += f'\n\n*{encode_markdown(str(floor_number))} этаж*'
 
         for object_number, object_description in objects.items():
             users_strs = []
@@ -1275,7 +1316,6 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                             user_str += user[0] + ' ' + user[1]
                         else:
                             user_str += user[0]
-                    user_str += '~~'
 
                 users_strs.append(user_str)
 
@@ -1286,7 +1326,12 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                 text += f'{floor_number} этаж, '
 
             if show_objects:
-                text += f'{object_number} \\({object_description["position"]}\\) {get_short_object_type_str_by_id(object_description["type"])}: '
+                text += f'{object_number} '
+
+                if floor_number != '-1':
+                    text += f'\\({object_description["position"]}\\) '
+
+                text += f'{object_description["type"]}: '
 
             text += "; ".join(users_strs)
 
@@ -1295,12 +1340,12 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                 text += 'XXX_SPLITTER_XXX'
                 lines = 0
 
-    return text
+    return text.strip()
 
 
 def bot_command_neighbours(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = \
-        identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if update.effective_chat.type != 'private' and not is_found_chat:
@@ -1368,8 +1413,8 @@ def bot_command_neighbours(update: Update, context: CallbackContext):
 
 
 def bot_command_who_is_this(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = \
-        identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if update.effective_chat.type != 'private' and not is_found_chat:
@@ -1542,7 +1587,8 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
 
 
 def bot_command_stats(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     # TODO: allow users for asking stats in private messages
@@ -1641,8 +1687,31 @@ def raw_try_send_user_link(update: Update, context: CallbackContext) -> User or 
     return -1
 
 
+def bot_command_assistant_help(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
+    this_user = USERS_CACHE.get_user(update)
+
+    if not this_user.is_identified():
+        bot_send_message_user_not_authorized(update, context)
+        return
+
+    text = 'Ассистент знает следующие темы:'
+
+    global HELP_ASSISTANT
+    for entry in HELP_ASSISTANT.db:
+        text += f'\n\n*{encode_markdown(entry["name"])}*\n`Бот, {encode_markdown(entry["test_queries"][0].lower())}`'
+
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text=text,
+                             reply_to_message_id=update.message.message_id,
+                             parse_mode='MarkdownV2')
+
+
 def bot_command_help(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not this_user.is_identified():
@@ -1692,7 +1761,8 @@ def bot_command_help(update: Update, context: CallbackContext):
 
 
 def bot_command_reload_db(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1713,7 +1783,8 @@ def bot_command_reload_db(update: Update, context: CallbackContext):
 
 
 def bot_command_reload(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1735,7 +1806,8 @@ def bot_command_reload(update: Update, context: CallbackContext):
 
 
 def bot_command_start_tables_sync(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1756,7 +1828,8 @@ def bot_command_start_tables_sync(update: Update, context: CallbackContext):
 
 
 def bot_command_stop_tables_sync(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1777,7 +1850,8 @@ def bot_command_stop_tables_sync(update: Update, context: CallbackContext):
 
 
 def bot_command_flush_users_context(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1798,7 +1872,8 @@ def bot_command_flush_users_context(update: Update, context: CallbackContext):
 
 
 def bot_command_flush_all_users_context(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1819,7 +1894,8 @@ def bot_command_flush_all_users_context(update: Update, context: CallbackContext
 
 
 def bot_command_start_users_context_autosave(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1840,7 +1916,8 @@ def bot_command_start_users_context_autosave(update: Update, context: CallbackCo
 
 
 def bot_command_stop_users_context_autosave(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1861,7 +1938,8 @@ def bot_command_stop_users_context_autosave(update: Update, context: CallbackCon
 
 
 def bot_command_start_cached_users_stale(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1882,7 +1960,8 @@ def bot_command_start_cached_users_stale(update: Update, context: CallbackContex
 
 
 def bot_command_stop_cached_users_stale(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1910,7 +1989,8 @@ def bot_command_recalculate_stats(update: Update, context: CallbackContext):
 
 
 def bot_command_reset_actions_queue(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1931,7 +2011,8 @@ def bot_command_reset_actions_queue(update: Update, context: CallbackContext):
 
 
 def bot_command_start_actions_queue(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1952,7 +2033,8 @@ def bot_command_start_actions_queue(update: Update, context: CallbackContext):
 
 
 def bot_command_stop_actions_queue(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
@@ -1973,7 +2055,8 @@ def bot_command_stop_actions_queue(update: Update, context: CallbackContext):
 
 
 def bot_command_revalidate_users_groups(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat or not chat_building:
@@ -2018,7 +2101,8 @@ def bot_command_revalidate_users_groups(update: Update, context: CallbackContext
 
 
 def bot_command_add_all_users_to_chats(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat or not chat_building:
@@ -2136,17 +2220,21 @@ def stats_collector(update: Update, context: CallbackContext):
 
 
 def bot_assistant_call(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
     user = USERS_CACHE.get_user(update)
 
     if not user.is_identified():
         return
 
     if is_bot_assistant_request(update):
-        HELP_ASSISTANT.proceed_request(update, context, user)
+        HELP_ASSISTANT.proceed_request(update, context, user, building_chats)
 
 
 def no_command_handler(update: Update, context: CallbackContext) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_found_chat and update.message.chat.type == 'private':
         proceed_private_dialog(update, context)
@@ -2160,7 +2248,8 @@ def no_command_handler(update: Update, context: CallbackContext) -> None:
 
 
 def cb_change_fullname(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat and update.message.chat.type != 'private':
         return
@@ -2200,7 +2289,8 @@ def cb_change_fullname(update: Update, context: CallbackContext, *input_args) ->
 
 
 def cb_change_user_type(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat and update.message.chat.type != 'private':
         return
@@ -2246,7 +2336,8 @@ def cb_change_user_type(update: Update, context: CallbackContext, *input_args) -
 
 
 def cb_change_phone(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat and update.message.chat.type != 'private':
         return
@@ -2285,7 +2376,8 @@ def cb_change_phone(update: Update, context: CallbackContext, *input_args) -> No
 
 
 def cb_change_phone_visibility(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat and update.message.chat.type != 'private':
         return
@@ -2348,7 +2440,8 @@ def get_chat_name_by_chat(chat) -> str:
 
 
 def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat and update.message.chat.type != 'private':
         return
@@ -2408,7 +2501,8 @@ def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> No
 
 
 def cb_remove_from_chats(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat and update.message.chat.type != 'private':
         return
@@ -2461,7 +2555,8 @@ def cb_remove_from_chats(update: Update, context: CallbackContext, *input_args) 
 
 
 def cb_lock_bot_access(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat:
         return
@@ -2490,7 +2585,8 @@ def cb_lock_bot_access(update: Update, context: CallbackContext, *input_args) ->
 
 
 def cb_lock_bot_access_submit(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat:
         return
@@ -2514,7 +2610,8 @@ def cb_lock_bot_access_submit(update: Update, context: CallbackContext, *input_a
 
 
 def cb_deactivate_user(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat:
         return
@@ -2543,7 +2640,8 @@ def cb_deactivate_user(update: Update, context: CallbackContext, *input_args) ->
 
 
 def cb_deactivate_user_submit(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section = identify_chat_by_tg_update(update)
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
 
     if not is_admin_chat:
         return
@@ -2631,6 +2729,9 @@ def setup_command_handlers(tg_dispatcher):
 
     help_handler = CommandHandler('help', bot_command_help)
     tg_dispatcher.add_handler(help_handler)
+
+    help_assistant_handler = CommandHandler('assistant_help', bot_command_assistant_help)
+    tg_dispatcher.add_handler(help_assistant_handler)
 
     # Admin commands
 
