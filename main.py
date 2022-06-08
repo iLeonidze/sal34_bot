@@ -2427,6 +2427,8 @@ def get_chat_name_by_chat(chat) -> str:
         chat_name = 'Общая группа'
     elif chat["name"] == 'public_info_channel':
         chat_name = 'Канал'
+    elif chat["name"] == 'guards_group':
+        chat_name = 'Охрана'
     elif chat["name"] == 'private_section_group':
         if chat['section'] == 'p':
             chat_name = 'Паркинг'
