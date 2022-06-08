@@ -387,7 +387,7 @@ class User:
             chats.append(chat)
 
         for chat in CONFIGS['buildings'][self.building]['groups']:
-            if chat['name'] in ['private_common_group', 'public_info_channel']:
+            if chat['name'] in ['private_common_group', 'public_info_channel', 'guards_group']:
                 chats.append(chat)
 
         return list({v['id']:v for v in chats}.values())
@@ -398,6 +398,15 @@ class User:
         for chat in chats:
             chats_ids.append(chat['id'])
         return chats_ids
+
+    def is_chat_related(self, requested_chat_id: int) -> bool:
+        is_chat_related = False
+        for chat_id in self.get_related_chats_ids():
+            if chat_id == requested_chat_id:
+                is_chat_related = True
+                break
+
+        return is_chat_related
 
     def add_to_chat(self, chat_id: int, save=True):
         if self.telegram_id == CONFIGS['service']['identity']['telegram']['superuser_id']:
@@ -836,7 +845,6 @@ async def _tg_client_send_message_to_user(message: str, user: User) -> None:
 
 def tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
     asyncio.run(_tg_client_add_user_to_channel(channel_id, user))
-
 
 
 def tg_client_send_invite_to_public_channel(invite_address, user: User) -> None:
@@ -1719,6 +1727,7 @@ def bot_command_help(update: Update, context: CallbackContext):
         return
 
     commands = [
+        ['assistant\\_help', 'Выводит список тем ассистента с примерами запросов'],
         ['help', 'Выводит этот список команд с подсказками'],
         ['neighbours', 'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно\\. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете \\(в общем чате это не работает\\)'],
         ['who', 'Узнать информацию о соседе или о себе\nНеобходимо вызывать эту команду ответив на чье\\-то сообщение, информацию о котором Вы хотите узнать\\. Вызов в общем чате покажет из какой секции, вызов в секции покажет с какого этажа и номер объекта недвижимости\\. Если вызвать команду без реплая, то будет выведена информация о Вас\\.'],
@@ -1742,6 +1751,7 @@ def bot_command_help(update: Update, context: CallbackContext):
         ['start\\_actions\\_queue', 'Запустить исполнение накопленной очереди действий'],
         ['stop\\_actions\\_queue', 'Остановить исполнение накопленной очереди действий'],
         ['add\\_all\\_users\\_to\\_chats', 'Принудительно добавляет всех пользователей в соответствующие им чаты'],
+        ['add\\_all\\_users\\_to\\_chat', 'Принудительно добавляет всех пользователей в заданный чат'],
         ['revalidate\\_users\\_groups', 'Ревалидирует наличие пользователя в группах'],
     ]
 
@@ -2132,6 +2142,98 @@ def bot_command_add_all_users_to_chats(update: Update, context: CallbackContext)
 
         try:
             user.add_to_all_chats()
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f'{i+1}/{len(users)} добавлен "{user.get_fullname()}"')
+            time.sleep(60)
+        except Exception as e:
+            print('An exception occurred')
+            print(traceback.format_exc())
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f'{i+1}/{len(users)} НЕ УДАЛОСЬ ДОБАВИТЬ "{user.get_fullname()}"\n\n{str(e)}')
+
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text='Все пользователи добавлены!',
+                             reply_to_message_id=update.message.message_id)
+
+
+def bot_command_add_all_users_to_chat(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
+    this_user = USERS_CACHE.get_user(update)
+
+    if not is_admin_chat or not chat_building:
+        bot_send_message_this_command_bot_allowed_here(update, context)
+        return
+
+    if not this_user.is_identified():
+        bot_send_message_user_not_authorized(update, context)
+        return
+
+    buttons = []
+
+    for chat in CONFIGS['buildings'][str(chat_building)]['groups']:
+        if chat['name'] == 'admin':
+            continue
+
+        chat_name = get_chat_name_by_chat(chat)
+        buttons.append([InlineKeyboardButton(f'{chat_name}',
+                                             callback_data=f'bulk_add_to_chats|{chat["id"]}')])
+
+    reply_markup = InlineKeyboardMarkup(buttons, resize_keyboard=False)
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text=f'Выберите куда необходимо добавить всех пользователей',
+                             reply_markup=reply_markup)
+
+
+def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_args):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+    this_user = USERS_CACHE.get_user(update)
+
+    if not is_admin_chat or not chat_building:
+        bot_send_message_this_command_bot_allowed_here(update, context)
+        return
+
+    if not this_user.is_identified():
+        bot_send_message_user_not_authorized(update, context)
+        return
+
+    if len(input_args) == 1:
+        requested_chat_id = input_args[0]
+    else:
+        return
+
+    requested_chat = None
+    for chat in CONFIGS['buildings'][str(chat_building)]['groups']:
+        if str(chat['id']) == str(requested_chat_id):
+            requested_chat = chat
+            break
+
+    if not requested_chat:
+        return
+
+    print(f'Admin requested add users to chat {requested_chat_id} "{get_chat_name_by_chat(requested_chat)}"!')
+
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text=f'Начинаю добавление в чат "{get_chat_name_by_chat(requested_chat)}" всех пользователей...')
+
+    users = get_all_users(chat_building)
+    for i, user in enumerate(users):
+        if user.is_added_to_group(requested_chat_id):
+            print(f'{user.get_fullname()} skipped\nalready added to group')
+            continue
+
+        # TODO: remove this if statement and sub-block?
+        if not user.add_to_group or not user.is_chat_related(int(requested_chat_id)):
+            # context.bot.send_message(chat_id=update.effective_chat.id,
+            #                          text=f'{i+1}/{len(users)} ПРОПУЩЕН "{user.get_fullname()}"')
+            print(f'{user.get_fullname()} skipped\nadd_to_group: {user.add_to_group}\nchat_related: {user.is_chat_related(int(requested_chat_id))}')
+            time.sleep(30)
+            continue
+
+        try:
+            user.add_to_chat(int(requested_chat_id))
             context.bot.send_message(chat_id=update.effective_chat.id,
                                      text=f'{i+1}/{len(users)} добавлен "{user.get_fullname()}"')
             time.sleep(60)
@@ -2690,6 +2792,7 @@ callback_functions = {
     'lock_bot_access_submit': cb_lock_bot_access_submit,
     'deactivate_user': cb_deactivate_user,
     'deactivate_user_submit': cb_deactivate_user_submit,
+    'bulk_add_to_chats': cb_bulk_add_to_chats,
 }
 
 callback_functions_keywords = {
@@ -2780,6 +2883,9 @@ def setup_command_handlers(tg_dispatcher):
     tg_dispatcher.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('add_all_users_to_chats', bot_command_add_all_users_to_chats)
+    tg_dispatcher.add_handler(reload_db_handler)
+
+    reload_db_handler = CommandHandler('add_all_users_to_chat', bot_command_add_all_users_to_chat)
     tg_dispatcher.add_handler(reload_db_handler)
 
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
