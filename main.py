@@ -1,6 +1,7 @@
 from __future__ import print_function, annotations
 
 import asyncio
+import datetime
 import json
 import math
 import os.path
@@ -27,10 +28,12 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboard
 
 import logging
 
+from telethon.errors import UserPrivacyRestrictedError
 from telethon.sync import TelegramClient
 from telethon.tl.functions.channels import InviteToChannelRequest
 from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContactsRequest, \
     AddContactRequest
+from telethon.tl.functions.messages import ExportChatInviteRequest
 from telethon.tl.types import InputPhoneContact
 
 from assistant import HelpAssistant, is_bot_assistant_request
@@ -851,6 +854,37 @@ def tg_client_send_invite_to_public_channel(invite_address, user: User) -> None:
     message = 'Обязательно подписывайтесь на инфо канал с важными новостями дома:\n' + invite_address
 
     asyncio.run(_tg_client_send_message_to_user(message, user))
+
+
+def tg_client_get_invites_for_chats(chats_ids: List[int]) -> List[str]:
+    results = []
+    for chat_id in chats_ids:
+        results.append(tg_client_get_invite_for_chat(chat_id))
+    return results
+
+
+def tg_client_get_invite_for_chat(chat_id: int) -> str:
+    return asyncio.run(_tg_client_get_invite_for_chat(chat_id))
+
+
+async def _tg_client_get_invite_for_chat(chat_id: int) -> str:
+    loop = asyncio.new_event_loop()
+
+    client_api_id = CONFIGS['service']['identity']['telegram']['client_api_id']
+    client_api_hash = CONFIGS['service']['identity']['telegram']['client_api_hash']
+
+    client: TelegramClient = TelegramClient('sal34_bot_client',
+                                            client_api_id,
+                                            client_api_hash,
+                                            loop=loop)
+
+    async with client:
+        result = await client(ExportChatInviteRequest(
+            peer=chat_id,
+            expire_date=datetime.datetime.now() + datetime.timedelta(days=1),
+            usage_limit=1
+        ))
+        return result.link
 
 
 def tg_bot_delete_user_from_channel(channel_id: int, user_id: int) -> None:
@@ -2563,6 +2597,13 @@ def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> No
                 user.add_to_all_chats()
                 context.bot.send_message(chat_id=update.effective_chat.id,
                                          text=f'Пользователь "{user.get_fullname()}" добавлен во все чаты')
+            except UserPrivacyRestrictedError as e:
+                context.bot.send_message(chat_id=update.effective_chat.id,
+                                         text=f'Пользователь "{user.get_fullname()}" запретил приглашать его в группы. Перешлите ему следующее сообщение с приглашением:')
+                invite_links = tg_client_get_invites_for_chats(user.get_related_chats_ids())
+                invite_links_str = "\n".join(invite_links)
+                context.bot.send_message(chat_id=update.effective_chat.id,
+                                         text=f'Добро пожаловать! Заходите в чаты по ссылкам:\n{invite_links_str}\n\nСсылками можно воспользоваться один раз и они действительны 24 часа')
             except Exception as e:
                 context.bot.send_message(chat_id=update.effective_chat.id,
                                          text=f'Не удалось добавить пользователя "{user.get_fullname()}" во все чаты\n\n{str(e)}')
@@ -2582,6 +2623,12 @@ def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> No
                 user.add_to_chat(int(target_chat_request))
                 context.bot.send_message(chat_id=update.effective_chat.id,
                                          text=f'Пользователь "{user.get_fullname()}" добавлен в чат "{chat_name}"')
+            except UserPrivacyRestrictedError as e:
+                context.bot.send_message(chat_id=update.effective_chat.id,
+                                         text=f'Пользователь "{user.get_fullname()}" запретил приглашать его в группы. Перешлите ему следующее сообщение с приглашением:')
+                invite_link = tg_client_get_invite_for_chat(int(target_chat_request))
+                context.bot.send_message(chat_id=update.effective_chat.id,
+                                         text=f'Заходите в чат по ссылке:\n{invite_link}\n\nСсылкой можно воспользоваться один раз и она действительна 24 часа')
             except Exception as e:
                 context.bot.send_message(chat_id=update.effective_chat.id,
                                          text=f'Не удалось добавить пользователя "{user.get_fullname()}" в чат "{chat_name}"\n\n{str(e)}')
