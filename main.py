@@ -815,15 +815,15 @@ async def _tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
 
     async with client:
 
-        # try:
-        #     await _tg_client_add_user_to_contacts(client,
-        #                                           phone=user.phone['number'],
-        #                                           user=user,
-        #                                           name=user.person['name'] + ' 34',
-        #                                           surname=user.person.get('surname', ''))
-        # except Exception as e:
-        #     print('Failed to add user to contacts')
-        #     print(e)
+        try:
+            await _tg_client_add_user_to_contacts(client,
+                                                  phone=user.phone['number'],
+                                                  user=user,
+                                                  name=user.person['name'] + ' 34',
+                                                  surname=user.person.get('surname', ''))
+        except Exception as e:
+            print('Failed to add user to contacts')
+            print(e)
 
         await client(InviteToChannelRequest(
             channel_id,
@@ -2592,7 +2592,14 @@ def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> No
 
     if len(input_args) > 1:
         target_chat_request = input_args[1]
-        if target_chat_request == 'all':
+        if target_chat_request == 'links':
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f'Запрошен список ссылок для пользователя "{user.get_fullname()}". Перешлите ему следующее сообщение с приглашением:')
+            invite_links = tg_client_get_invites_for_chats(user.get_related_chats_ids())
+            invite_links_str = "\n".join(invite_links)
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f'Добро пожаловать! Заходите в чаты по ссылкам:\n{invite_links_str}\n\nСсылками можно воспользоваться один раз и они действительны 24 часа')
+        elif target_chat_request == 'all':
             try:
                 user.add_to_all_chats()
                 context.bot.send_message(chat_id=update.effective_chat.id,
@@ -2644,6 +2651,8 @@ def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> No
     for chat in user_related_chats:
         chat_name = get_chat_name_by_chat(chat)
         buttons.append([InlineKeyboardButton(f'{chat_name}', callback_data=f'add_to_chats|{user.telegram_id}|{chat["id"]}')])
+
+    buttons.append([InlineKeyboardButton("Список ссылок", callback_data=f'add_to_chats|{user.telegram_id}|links')])
 
     reply_markup = InlineKeyboardMarkup(buttons, resize_keyboard=False)
     context.bot.send_message(chat_id=update.effective_chat.id,
