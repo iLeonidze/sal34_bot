@@ -881,7 +881,7 @@ async def _tg_client_get_invite_for_chat(chat_id: int) -> str:
     async with client:
         result = await client(ExportChatInviteRequest(
             peer=chat_id,
-            expire_date=datetime.datetime.now() + datetime.timedelta(days=1),
+            expire_date=datetime.datetime.utcnow() + datetime.timedelta(days=1),
             usage_limit=1
         ))
         return result.link
