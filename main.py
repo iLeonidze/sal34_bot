@@ -609,6 +609,7 @@ def rebuild_neighbours_dict_from_table(table: DataFrame) -> Dict[str, Dict[str, 
 def encode_markdown(string: str):
     # TODO: this is slow
     return string.replace('-', '\\-') \
+                 .replace('_', '\\_') \
                  .replace('.', '\\.') \
                  .replace('(', '\\(') \
                  .replace(')', '\\)') \
@@ -1729,28 +1730,6 @@ def raw_try_send_user_link(update: Update, context: CallbackContext) -> User or 
     return -1
 
 
-def bot_command_assistant_help(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    this_user = USERS_CACHE.get_user(update)
-
-    if not this_user.is_identified():
-        bot_send_message_user_not_authorized(update, context)
-        return
-
-    text = 'Ассистент знает следующие темы:'
-
-    global HELP_ASSISTANT
-    for entry in HELP_ASSISTANT.db:
-        text += f'\n\n*{encode_markdown(entry["name"])}*\n`Бот, {encode_markdown(entry["test_queries"][0].lower())}`'
-
-    context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=text,
-                             reply_to_message_id=update.message.message_id,
-                             parse_mode='MarkdownV2')
-
-
 def bot_command_help(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
@@ -1761,47 +1740,62 @@ def bot_command_help(update: Update, context: CallbackContext):
         return
 
     commands = [
-        ['assistant\\_help', 'Выводит список тем ассистента с примерами запросов'],
-        ['help', 'Выводит этот список команд с подсказками'],
-        ['neighbours', 'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно\\. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете \\(в общем чате это не работает\\)'],
-        ['who', 'Узнать информацию о соседе или о себе\nНеобходимо вызывать эту команду ответив на чье\\-то сообщение, информацию о котором Вы хотите узнать\\. Вызов в общем чате покажет из какой секции, вызов в секции покажет с какого этажа и номер объекта недвижимости\\. Если вызвать команду без реплая, то будет выведена информация о Вас\\.'],
+        ['help', 'Выводит это сообщение о том как пользоваться ботом'],
+        ['neighbours', 'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете (в общем чате это не работает)'],
+        ['who', 'Узнать информацию о соседе или о себе\nНеобходимо вызывать эту команду ответив на чье-то сообщение, информацию о котором Вы хотите узнать. Вызов в общем чате покажет из какой секции, вызов в секции покажет с какого этажа и номер объекта недвижимости. Если вызвать команду без реплая, то будет выведена информация о Вас.'],
         ['stats', 'Общая статистика по дому или секции\nВ общем чате показывает сколько соседей добавлено в базу, в чате секции показывает количество жильцов на каждом этаже'],
     ]
 
     admin_commands = [
-        ['who', 'Выводит всю информацию о человеке по одному из заданных параметров:\n\\- Сообщение\n\\- Форвард сообщения\n\\- Контакт\n\\- Username\n\\- Номер телефона\n\\- Номер телефона вне нашей базы\n\\- ID телеграма'],
-        ['reload', 'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы \\(это действие высвободит память, но может привести к снижению производительности бота\\)'],
-        # ['reload\\_db', 'Вызывает принудительную синхронизацию всех таблиц БД'],
-        ['start\\_tables\\_sync', 'Начинает синхронизацию таблиц БД'],
-        ['stop\\_tables\\_sync', 'Останавливает синхронизацию таблиц БД'],
-        ['flush\\_users\\_context', 'Вызывает принудительное сохранение контекстных данных пользователей, ожидающих сохранения'],
-        ['flush\\_all\\_users\\_context', 'Вызывает принудительное сохранение контекстных данных ВСЕХ пользователей, находящихся в кэше'],
-        ['start\\_users\\_context\\_autosave', 'Запускает автосохранение контекстных данных пользователей'],
-        ['stop\\_users\\_context\\_autosave', 'Останавливает автосохранение контекстных данных пользователей'],
-        ['start\\_cached\\_users\\_stale', 'Запускает устаревание и автоматическое извлечение старых пользователей из кэша'],
-        ['stop\\_cached\\_users\\_stale', 'Прекращает устаревание и автоматическое извлечение старых пользователей из кэша'],
-        ['recalculate\\_stats', 'Вызывает перерасчет всей статистики'],
-        ['reset\\_actions\\_queue', 'Сбросить очередь запланированных действий \\(в т\\.ч\\. сбрасывает очередь удаления мусора\\)'],
-        ['start\\_actions\\_queue', 'Запустить исполнение накопленной очереди действий'],
-        ['stop\\_actions\\_queue', 'Остановить исполнение накопленной очереди действий'],
-        ['add\\_all\\_users\\_to\\_chats', 'Принудительно добавляет всех пользователей в соответствующие им чаты'],
-        ['add\\_all\\_users\\_to\\_chat', 'Принудительно добавляет всех пользователей в заданный чат'],
-        ['revalidate\\_users\\_groups', 'Ревалидирует наличие пользователя в группах'],
+        ['who', 'Выводит всю информацию о человеке по одному из заданных параметров:\n- Сообщение\n- Форвард сообщения\n- Контакт\n- Username\n- Номер телефона\n- Номер телефона вне нашей базы\n- ID телеграма'],
+        ['reload', 'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы (это действие высвободит память, но может привести к снижению производительности бота)'],
+        # ['reload_db', 'Вызывает принудительную синхронизацию всех таблиц БД'],
+        ['start_tables_sync', 'Начинает синхронизацию таблиц БД'],
+        ['stop_tables_sync', 'Останавливает синхронизацию таблиц БД'],
+        ['flush_users_context', 'Вызывает принудительное сохранение контекстных данных пользователей, ожидающих сохранения'],
+        ['flush_all_users_context', 'Вызывает принудительное сохранение контекстных данных ВСЕХ пользователей, находящихся в кэше'],
+        ['start_users_context_autosave', 'Запускает автосохранение контекстных данных пользователей'],
+        ['stop_users_context_autosave', 'Останавливает автосохранение контекстных данных пользователей'],
+        ['start_cached_users_stale', 'Запускает устаревание и автоматическое извлечение старых пользователей из кэша'],
+        ['stop_cached_users_stale', 'Прекращает устаревание и автоматическое извлечение старых пользователей из кэша'],
+        ['recalculate_stats', 'Вызывает перерасчет всей статистики'],
+        ['reset_actions_queue', 'Сбросить очередь запланированных действий (в т.ч. сбрасывает очередь удаления мусора)'],
+        ['start_actions_queue', 'Запустить исполнение накопленной очереди действий'],
+        ['stop_actions_queue', 'Остановить исполнение накопленной очереди действий'],
+        ['add_all_users_to_chats', 'Принудительно добавляет всех пользователей в соответствующие им чаты'],
+        ['add_all_users_to_chat', 'Принудительно добавляет всех пользователей в заданный чат'],
+        ['revalidate_users_groups', 'Ревалидирует наличие пользователя в группах'],
     ]
 
-    message = '*У бота доступны следующие команды*'
-    for command in commands:
-        message += f'\n\n/{command[0]}\n{command[1]}'
+    message = encode_markdown('В чатах дома есть бот-ассистент, который помогает соседям. Также '
+                              'боту можно написать в личные сообщения, нажав на его аватарку '
+                              'слева. Боту можно задать интересующий вас вопрос: напишите обычное '
+                              'сообщение со своим вопросом, а в начале сообщение не забудьте '
+                              'позвать бота написав "Бот,"\n\nВот на что бот умеет отвечать:')
 
-    if is_admin_chat:
-        message += '\n\n\n*Админские команды*'
-        for admin_command in admin_commands:
-            message += f'\n\n/{admin_command[0]}\n{admin_command[1]}'
+    global HELP_ASSISTANT
+    for entry in HELP_ASSISTANT.db:
+        message += f'\n\n*{encode_markdown(entry["name"])}*\n`Бот, {encode_markdown(entry["test_queries"][0].lower())}`'
 
     context.bot.send_message(chat_id=update.effective_chat.id,
                              text=message,
                              reply_to_message_id=update.message.message_id,
                              parse_mode='MarkdownV2')
+
+
+
+    # for command in commands:
+    #     message += f'\n\n/{command[0]}\n{command[1]}'
+
+    if is_admin_chat:
+        message = '*Админские команды*'
+        for admin_command in admin_commands:
+            message += f'\n\n/{encode_markdown(admin_command[0])}\n{encode_markdown(admin_command[1])}'
+
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=message,
+                                 reply_to_message_id=update.message.message_id,
+                                 parse_mode='MarkdownV2')
 
 
 def bot_command_reload_db(update: Update, context: CallbackContext):
@@ -2891,7 +2885,8 @@ def setup_command_handlers(tg_dispatcher):
     help_handler = CommandHandler('help', bot_command_help)
     tg_dispatcher.add_handler(help_handler)
 
-    help_assistant_handler = CommandHandler('assistant_help', bot_command_assistant_help)
+    # TODO: remove this old menu
+    help_assistant_handler = CommandHandler('assistant_help', bot_command_help)
     tg_dispatcher.add_handler(help_assistant_handler)
 
     # Admin commands
