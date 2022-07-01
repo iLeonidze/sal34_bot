@@ -77,6 +77,8 @@ DF_COLUMNS = [
     'phone',
     'added_to_group',
     'show_phone',
+    'hidden',
+    'deleted',
     'updated',
     'comments',
     'has_other_objects',
@@ -199,6 +201,8 @@ class User:
             }
 
             self.add_to_group = self.db_entries['added_to_group'].iloc[effective_index] == 'YES'
+            self.hidden = self.db_entries['hidden'].iloc[effective_index] == 'YES'
+            self.deleted = self.db_entries['deleted'].iloc[effective_index] == 'YES'
 
             phone_number = self.db_entries['phone'].iloc[effective_index]
             if phone_number:
@@ -1343,10 +1347,13 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
             users_strs = []
             for user in object_description['users']:
                 if isinstance(user, User):
-                    if not private:
-                        user_str = user.get_linked_shortname()
+                    if user.hidden:
+                        user_str = '_скрыт_'
                     else:
-                        user_str = user.get_linked_seminame() + ' тел\\. \\' + user.get_public_phone()
+                        if not private:
+                            user_str = user.get_linked_shortname()
+                        else:
+                            user_str = user.get_linked_seminame() + ' тел\\. \\' + user.get_public_phone()
                 else:
                     user_str = 'нет '
                     if not private:
@@ -1515,11 +1522,14 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
         return proceed_private_dialog_send_profile(update, context)
 
     if not is_admin_chat:
-        if requested_user == this_user:
-            who_form = 'Вы'
+        if requested_user.hidden:
+            text = 'Скрыт'
         else:
-            who_form = 'Это'
-        text = f'{who_form} ' + requested_user.get_linked_shortname()
+            if requested_user == this_user:
+                who_form = 'Вы'
+            else:
+                who_form = 'Это'
+            text = f'{who_form} ' + requested_user.get_linked_shortname()
     else:
         text = 'Это ' + requested_user.get_linked_fullname()
 
@@ -1532,10 +1542,17 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
         else:
             text += f' без телефона'
 
+        text += '\nДобавить в группу: '
         if requested_user.add_to_group:
-            text += '\nДобавить в группу: Да'
+            text += 'Да'
         else:
-            text += '\nДобавить в группу: Нет'
+            text += 'Нет'
+
+        text += '\nВидимость пользователя: '
+        if requested_user.hidden:
+            text += 'Скрыт'
+        else:
+            text += 'Виден'
 
         status_str, added_everywhere = requested_user.get_str_user_related_groups_status()
         text += '\n\n' + status_str
@@ -1565,7 +1582,7 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
             ]
         ], resize_keyboard=False)
 
-    if not is_admin_chat:
+    if not is_admin_chat and not requested_user.hidden:
 
         if chat_section is None:
 
