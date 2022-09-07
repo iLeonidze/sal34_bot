@@ -82,6 +82,8 @@ DF_COLUMNS = [
     'updated',
     'comments',
     'has_other_objects',
+    'username',
+    'voted',
     'contract_id',
     'contract_date',
     'contract_reg_id',
@@ -1488,7 +1490,7 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
         requested_user_id = update.message.from_user.id
         reply_to_message_id = update.message.message_id
     elif update.message.reply_to_message.contact:
-        requested_user_id = update.effective_user.id
+        requested_user_id = update.message.reply_to_message.contact.user_id
     elif update.message.reply_to_message.forward_from:
         requested_user_id = update.message.reply_to_message.forward_from.id
     else:
@@ -1510,7 +1512,7 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
         if is_admin_chat and requested_user_id != -1:
             text = f'{text}\nID пользователя: `{str(requested_user_id)}`'
             if update.message.reply_to_message.contact:
-                text = f'{text}\nТелефон: `{str(update.message.reply_to_message.contact.phone_number)}`'
+                text = f'{text}\nТелефон: `{str(update.message.reply_to_message.contact.phone_number).replace("+", "")}`'
 
         context.bot.send_message(chat_id=update.effective_chat.id,
                                  text=text,
