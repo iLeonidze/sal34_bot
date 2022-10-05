@@ -2381,6 +2381,18 @@ def bot_assistant_call(update: Update, context: CallbackContext):
         HELP_ASSISTANT.proceed_request(update, context, user, building_chats)
 
 
+def bot_added_user_handler(update: Update, context: CallbackContext):
+    if len(update.message.new_chat_members) > 0:
+        print('Users added found')
+        def remove_message():
+            print('Deleting message with added users list')
+            interval.cancel()
+            TG_BOT.delete_message(chat_id=update.message.chat_id,
+                                  message_id=update.message.message_id)
+        interval = SetInterval(remove_message, 30)
+    pass
+
+
 def no_command_handler(update: Update, context: CallbackContext) -> None:
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
@@ -2888,6 +2900,8 @@ def setup_command_handlers(tg_dispatcher):
     tg_dispatcher.add_handler(MessageHandler(Filters.all, stats_collector), group=-1)
 
     tg_dispatcher.add_handler(MessageHandler(Filters.all, bot_assistant_call), group=-2)
+
+    tg_dispatcher.add_handler(MessageHandler(Filters.all, bot_added_user_handler), group=-3)
 
     start_handler = CommandHandler('start', bot_command_start)
     tg_dispatcher.add_handler(start_handler)

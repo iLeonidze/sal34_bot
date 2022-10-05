@@ -12,7 +12,8 @@ help_file_path = './help.yaml'
 
 
 def is_bot_assistant_request(update: Update) -> bool:
-    return update.message.text[0] != '/' and \
+    return update.message.text is not None and \
+           update.message.text[0] != '/' and \
            (update.message.text.lower()[:4] == 'бот,' or
             update.message.chat.type == 'private' or
             is_activation_phrase(update))
