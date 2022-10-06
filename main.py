@@ -12,7 +12,7 @@ import threading
 import traceback
 from typing import Dict, List, Any
 
-from emoji import UNICODE_EMOJI_ENGLISH
+import emoji
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -139,7 +139,7 @@ def get_default_context():
 
 def is_emoji(s):
     for symbol in set(s.lower()):
-        if symbol not in UNICODE_EMOJI_ENGLISH:
+        if symbol not in emoji.EMOJI_DATA:
             return False
 
     return True
