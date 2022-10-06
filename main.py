@@ -2382,7 +2382,9 @@ def bot_assistant_call(update: Update, context: CallbackContext):
 
 
 def bot_added_user_handler(update: Update, context: CallbackContext):
-    if len(update.message.new_chat_members) > 0:
+    if update.message and \
+            update.message.new_chat_members and \
+            len(update.message.new_chat_members) > 0:
         print('Users added found')
         def remove_message():
             print('Deleting message with added users list')
