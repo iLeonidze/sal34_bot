@@ -13,6 +13,7 @@ import traceback
 from typing import Dict, List, Any
 
 import emoji
+import numpy as np
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -621,6 +622,57 @@ def encode_markdown(string: str):
                  .replace(')', '\\)') \
                  .replace('[', '\\[') \
                  .replace(']', '\\]')
+
+
+def get_object_persons(building, object_type_name: str, obj_n: str):
+    table = DB[building]
+    persons_raw = table[(table['object_type'] == object_type_name) & (table['number'] == obj_n)]
+    persons = {
+        'owners': [],
+        'rents': [],
+        'residents': []
+    }
+    for index, person_raw in persons_raw.iterrows():
+        if person_raw.get('telegram'):
+            person = USERS_CACHE.get_user(person_raw['telegram'])
+        else:
+            person = person_raw
+
+        person_type = None
+        if person_raw['user_type'].lower() == 'собственник':
+            person_type = 'owners'
+        elif person_raw['user_type'].lower() == 'арендатор':
+            person_type = 'rents'
+        elif person_raw['user_type'].lower() == 'пользователь':
+            person_type = 'residents'
+
+        if person_type:
+            persons[person_type].append(person)
+
+    return persons
+
+
+def get_persons_per_objects(building) -> Dict:
+    table = DB[building]
+
+    building_objects = {}
+    for object_type_name in OBJECT_TYPES_NAMES.keys():
+        building_objects[object_type_name] = {}
+
+        objects_ndarray = table[table['object_type'] == object_type_name]['number'].unique()
+        for obj_n in objects_ndarray:
+            obj_row = table[(table['object_type'] == object_type_name) & (table['number'] == obj_n)].iloc[0]
+            entrance = obj_row.entrance
+            floor = obj_row.floor
+
+            persons = get_object_persons(building, object_type_name, obj_n)
+            building_objects[object_type_name][obj_n] = {
+                'entrance': entrance,
+                'floor': floor,
+                'persons': persons
+            }
+
+    return building_objects
 
 
 def get_all_users(building) -> List:
@@ -2233,6 +2285,105 @@ def bot_command_add_all_users_to_chat(update: Update, context: CallbackContext):
                              reply_markup=reply_markup)
 
 
+def bot_command_get_unknown_neighbours_file(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
+    this_user = USERS_CACHE.get_user(update)
+
+    if not is_admin_chat or not chat_building:
+        bot_send_message_this_command_bot_allowed_here(update, context)
+        return
+
+    if not this_user.is_identified():
+        bot_send_message_user_not_authorized(update, context)
+        return
+
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text='Собираю базу...',
+                             reply_to_message_id=update.message.message_id)
+
+    persons_per_objs = get_persons_per_objects(chat_building)
+
+    columns = ['type', 'entrance', 'floor', 'number']
+    fully_unknown = pd.DataFrame(columns=columns)
+    partially_unknown = pd.DataFrame(columns=columns)
+    bad_data = pd.DataFrame(columns=columns)
+    unknown_telegram = pd.DataFrame(columns=columns)
+
+    for obj_type, objs in persons_per_objs.items():
+        for obj_number, obj_details in objs.items():
+
+            has_owners = False
+            has_anybody = False
+            has_bad_data = False
+            has_unknown_telegram = False
+
+            if obj_details['persons']['owners']:
+                for person in obj_details['persons']['owners']:
+                    if isinstance(person, User):
+                        has_owners = True
+                        has_anybody = True
+
+                        if not person.phone or \
+                                not person.telegram_id or \
+                                not person.person['name'] or \
+                                person.person['name'] == '' or \
+                                not person.person['surname'] or \
+                                person.person['surname'] == '' or \
+                                not person.person['patronymic'] or \
+                                person.person['patronymic'] == '':
+                            has_bad_data = True
+                    else:
+                        if person['phone']:
+                            # case when phone is set, but no tg id
+                            has_unknown_telegram = True
+
+            if not has_anybody and (obj_details['persons']['rents'] or obj_details['persons']['residents']):
+                has_anybody = True
+
+            row = {
+                'type': obj_type,
+                'entrance': int(obj_details['entrance']),
+                'floor': int(obj_details['floor']),
+                'number': int(obj_number)
+            }
+
+            if has_unknown_telegram:
+                unknown_telegram = unknown_telegram.append(row, ignore_index=True)
+            elif has_bad_data:
+                bad_data = bad_data.append(row, ignore_index=True)
+            else:
+                if not has_owners and not has_anybody:
+                    fully_unknown = fully_unknown.append(row, ignore_index=True)
+
+                if not has_owners and has_anybody:
+                    partially_unknown = partially_unknown.append(row, ignore_index=True)
+
+    fully_unknown.to_excel("fully_unknown.xlsx")
+    partially_unknown.to_excel("partially_unknown.xlsx")
+    bad_data.to_excel("bad_data.xlsx")
+    unknown_telegram.to_excel("unknown_telegram.xlsx")
+
+    context.bot.sendDocument(chat_id=update.effective_chat.id,
+                             document=open('fully_unknown.xlsx', 'rb'),
+                             reply_to_message_id=update.message.message_id)
+    context.bot.sendDocument(chat_id=update.effective_chat.id,
+                             document=open('partially_unknown.xlsx', 'rb'),
+                             reply_to_message_id=update.message.message_id)
+    context.bot.sendDocument(chat_id=update.effective_chat.id,
+                             document=open('bad_data.xlsx', 'rb'),
+                             reply_to_message_id=update.message.message_id)
+    context.bot.sendDocument(chat_id=update.effective_chat.id,
+                             document=open('unknown_telegram.xlsx', 'rb'),
+                             reply_to_message_id=update.message.message_id)
+
+    os.unlink("fully_unknown.xlsx")
+    os.unlink("partially_unknown.xlsx")
+    os.unlink("bad_data.xlsx")
+    os.unlink("unknown_telegram.xlsx")
+
+
 def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_args):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
@@ -2973,6 +3124,9 @@ def setup_command_handlers(tg_dispatcher):
 
     reload_db_handler = CommandHandler('add_all_users_to_chat', bot_command_add_all_users_to_chat)
     tg_dispatcher.add_handler(reload_db_handler)
+
+    get_unknown_neighbours_db = CommandHandler('get_unknown_neighbours_file', bot_command_get_unknown_neighbours_file)
+    tg_dispatcher.add_handler(get_unknown_neighbours_db)
 
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
     tg_dispatcher.add_handler(revalidate_users_groups_handler)
