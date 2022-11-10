@@ -639,11 +639,11 @@ def get_object_persons(building, object_type_name: str, obj_n: str):
             person = person_raw
 
         person_type = None
-        if person_raw['user_type'].lower() == 'собственник':
+        if person_raw['user_type'] == 'собственник':
             person_type = 'owners'
-        elif person_raw['user_type'].lower() == 'арендатор':
+        elif person_raw['user_type'] == 'арендатор':
             person_type = 'rents'
-        elif person_raw['user_type'].lower() == 'пользователь':
+        elif person_raw['user_type'] == 'пользователь':
             person_type = 'residents'
 
         if person_type:
@@ -1055,7 +1055,8 @@ def reload_tables():
                 print('Syncing tables error PEOPLE: No data')
                 return
 
-            DB[building_number] = pd.DataFrame(rows, columns=DF_COLUMNS)
+            DB[building_number] = pd.DataFrame(rows, columns=DF_COLUMNS).applymap(lambda x: x.strip() if isinstance(x, str) else x)
+            DB[building_number]['user_type'] = DB[building_number]['user_type'].str.lower()
 
             # ASSISTANT
             spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['assistant']['id']
@@ -1836,6 +1837,8 @@ def bot_command_help(update: Update, context: CallbackContext):
         ['add_all_users_to_chats', 'Принудительно добавляет всех пользователей в соответствующие им чаты'],
         ['add_all_users_to_chat', 'Принудительно добавляет всех пользователей в заданный чат'],
         ['revalidate_users_groups', 'Ревалидирует наличие пользователя в группах'],
+        ['get_unknown_neighbours_file', 'Получить списки неизвестных соседей'],
+        ['get_potential_neighbours_issues', 'Получить возможные ошибки в записях соседей'],
     ]
 
     message = encode_markdown('В чатах дома есть бот-ассистент, который помогает соседям. Также '
@@ -2283,6 +2286,47 @@ def bot_command_add_all_users_to_chat(update: Update, context: CallbackContext):
     context.bot.send_message(chat_id=update.effective_chat.id,
                              text=f'Выберите куда необходимо добавить всех пользователей',
                              reply_markup=reply_markup)
+
+
+def bot_command_get_potential_neighbours_issues(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
+    this_user = USERS_CACHE.get_user(update)
+
+    if not is_admin_chat or not chat_building:
+        bot_send_message_this_command_bot_allowed_here(update, context)
+        return
+
+    if not this_user.is_identified():
+        bot_send_message_user_not_authorized(update, context)
+        return
+
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text='Проверяю базу на предмет пропущенных записей соседей...',
+                             reply_to_message_id=update.message.message_id)
+
+    table = DB[chat_building]
+    uniq_names = table[table['telegram'] != ''][['name', 'surname', 'patronymic']].drop_duplicates()
+    for index, uname in uniq_names.iterrows():
+        found_non_tg_recs = False
+        found_recs_for_uniq = table[(table['name'] == uname['name']) &
+              (table['surname'] == uname['surname']) &
+              (table['patronymic'] == uname['patronymic'])][['name', 'surname', 'patronymic', 'telegram']]
+        uutg = None
+        for index2, uuname in found_recs_for_uniq.iterrows():
+            if not uuname['telegram']:
+                found_non_tg_recs = True
+            else:
+                uutg = uuname['telegram']
+        if found_non_tg_recs:
+            fullname = ' '.join([uname['surname'], uname['name'], uname['patronymic']])
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f'Несоответствие\n{fullname}\nTG ID: {uutg}')
+
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text='Завершено',
+                             reply_to_message_id=update.message.message_id)
 
 
 def bot_command_get_unknown_neighbours_file(update: Update, context: CallbackContext):
@@ -3127,6 +3171,9 @@ def setup_command_handlers(tg_dispatcher):
 
     get_unknown_neighbours_db = CommandHandler('get_unknown_neighbours_file', bot_command_get_unknown_neighbours_file)
     tg_dispatcher.add_handler(get_unknown_neighbours_db)
+
+    get_potential_neighbours_issues = CommandHandler('get_potential_neighbours_issues', bot_command_get_potential_neighbours_issues)
+    tg_dispatcher.add_handler(get_potential_neighbours_issues)
 
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
     tg_dispatcher.add_handler(revalidate_users_groups_handler)
