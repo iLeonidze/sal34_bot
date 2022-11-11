@@ -7,3 +7,4 @@ telethon
 cython
 numpy
 pandas
+openpyxl
