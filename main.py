@@ -81,8 +81,10 @@ DF_COLUMNS = [
     'hidden',
     'deleted',
     'updated',
-    'comments',
     'has_other_objects',
+    'comments',
+    'notification_address',
+    'notification_index',
     'username',
     'voted',
     'contract_id',
@@ -213,6 +215,12 @@ class User:
                     'number': phone_number,
                     'visible': self.db_entries['show_phone'].iloc[effective_index] == 'YES'
                 }
+
+            address = self.db_entries['notification_address'].iloc[effective_index]
+            self.notification = {
+                'address': address,
+                'index': self.db_entries['notification_index'].iloc[effective_index]
+            }
 
             self.own_object_types = self.db_entries['object_type'].unique()
 
@@ -397,7 +405,7 @@ class User:
             chats.append(chat)
 
         for chat in CONFIGS['buildings'][self.building]['groups']:
-            if chat['name'] in ['private_common_group', 'public_info_channel', 'guards_group']:
+            if chat['name'] in ['private_common_group', 'public_info_channel', 'guards_group', 'cleaning_group']:
                 chats.append(chat)
 
         return list({v['id']:v for v in chats}.values())
@@ -1597,6 +1605,8 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
         else:
             text += f' без телефона'
 
+        text += '\nTG ID: `' + str(requested_user.telegram_id) + '`'
+
         text += '\nДобавить в группу: '
         if requested_user.add_to_group:
             text += 'Да'
@@ -1608,6 +1618,12 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
             text += 'Скрыт'
         else:
             text += 'Виден'
+
+        text += '\nАдрес для уведомлений: '
+        if requested_user.notification is not None:
+            text += '\n' + '`' + requested_user.notification['address'] + ' (' + requested_user.notification['index'] + ')`'
+        else:
+            text += 'Нет'
 
         status_str, added_everywhere = requested_user.get_str_user_related_groups_status()
         text += '\n\n' + status_str
@@ -2787,6 +2803,8 @@ def get_chat_name_by_chat(chat) -> str:
         chat_name = 'Канал'
     elif chat["name"] == 'guards_group':
         chat_name = 'Охрана'
+    elif chat["name"] == 'cleaning_group':
+        chat_name = 'Клининг'
     elif chat["name"] == 'private_section_group':
         if chat['section'] == 'p':
             chat_name = 'Паркинг'
