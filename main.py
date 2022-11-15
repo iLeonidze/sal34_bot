@@ -63,6 +63,7 @@ DB = {}
 QUEUED_ACTIONS = []
 
 DF_COLUMNS = [
+    'property_id',
     'entrance',
     'floor',
     'floor_position',
@@ -85,6 +86,7 @@ DF_COLUMNS = [
     'comments',
     'notification_address',
     'notification_index',
+    'email',
     'username',
     'voted',
     'contract_id',
@@ -216,11 +218,20 @@ class User:
                     'visible': self.db_entries['show_phone'].iloc[effective_index] == 'YES'
                 }
 
+            email = self.db_entries['email'].iloc[effective_index]
+            if email:
+                self.email = email
+            else:
+                self.email = None
+
             address = self.db_entries['notification_address'].iloc[effective_index]
-            self.notification = {
-                'address': address,
-                'index': self.db_entries['notification_index'].iloc[effective_index]
-            }
+            if address:
+                self.notification = {
+                    'address': address,
+                    'index': self.db_entries['notification_index'].iloc[effective_index]
+                }
+            else:
+                self.notification = None
 
             self.own_object_types = self.db_entries['object_type'].unique()
 
@@ -246,6 +257,7 @@ class User:
                 })
 
                 self.objects.append({
+                    'property_id': row['property_id'],
                     'building': row['building'],
                     'floor': int(row['floor']),
                     'section': section_id,
@@ -1620,7 +1632,7 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
             text += 'Виден'
 
         text += '\nАдрес для уведомлений: '
-        if requested_user.notification is not None:
+        if requested_user.notification:
             text += '\n' + '`' + requested_user.notification['address'] + ' (' + requested_user.notification['index'] + ')`'
         else:
             text += 'Нет'
