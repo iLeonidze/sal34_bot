@@ -1619,6 +1619,12 @@ def bot_command_who_is_this(update: Update, context: CallbackContext):
 
         text += '\nTG ID: `' + str(requested_user.telegram_id) + '`'
 
+        text += '\nE-mail: '
+        if requested_user.email:
+            text += requested_user.email
+        else:
+            text += 'Нет'
+
         text += '\nДобавить в группу: '
         if requested_user.add_to_group:
             text += 'Да'
