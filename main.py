@@ -14,6 +14,7 @@ from typing import Dict, List, Any
 
 import emoji
 import numpy as np
+import requests
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -152,6 +153,34 @@ def is_emoji(s):
 
 def is_repeated_symbol(s):
     return len(set(s.lower())) == 1
+
+
+def parse_address(query: str) -> (str or None, int or None):
+    address = None
+    index = None
+
+    r = requests.post("https://www.pochta.ru/suggestions/v2/suggestion.find-addresses",
+                      json={
+                          "query": query,
+                          "limit": 5,
+                          "language": "RUSSIAN",
+                          "mailDirection": "ALL",
+                          "fromBound": "REGION"
+                      },
+                      headers={
+                          'Accept': 'application/json',
+                          'Content-Type': 'application/json',
+                          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15',
+                          'Accept-Language': 'ru',
+                          'Referer': 'https://www.pochta.ru/offices'
+                      })
+
+    if len(r.json()) > 0:
+        el = r.json()[0]
+        address = el['normalizedAddress']
+        index = el['postalCode']
+
+    return address, index
 
 
 class SetInterval:
@@ -1873,6 +1902,7 @@ def bot_command_help(update: Update, context: CallbackContext):
         ['revalidate_users_groups', 'Ревалидирует наличие пользователя в группах'],
         ['get_unknown_neighbours_file', 'Получить списки неизвестных соседей'],
         ['get_potential_neighbours_issues', 'Получить возможные ошибки в записях соседей'],
+        ['parse_address', 'Распарсить почтовый адрес'],
     ]
 
     message = encode_markdown('В чатах дома есть бот-ассистент, который помогает соседям. Также '
@@ -2361,6 +2391,47 @@ def bot_command_get_potential_neighbours_issues(update: Update, context: Callbac
     context.bot.send_message(chat_id=update.effective_chat.id,
                              text='Завершено',
                              reply_to_message_id=update.message.message_id)
+
+
+def bot_command_parse_address(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
+    this_user = USERS_CACHE.get_user(update)
+
+    if not is_admin_chat or not chat_building:
+        bot_send_message_this_command_bot_allowed_here(update, context)
+        return
+
+    if not this_user.is_identified():
+        bot_send_message_user_not_authorized(update, context)
+        return
+
+    if not update.message.reply_to_message:
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=f'Эту команду можно использовать только реплаем на искомый адрес',
+                                 reply_to_message_id=update.message.reply_to_message.message_id)
+        return
+
+    query = update.message.reply_to_message.text
+
+    try:
+        address, index = parse_address(query)
+        if address is None:
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f'Адрес не найден',
+                                     reply_to_message_id=update.message.reply_to_message.message_id)
+        else:
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f'`{address}`\n\n`{index}`',
+                                     parse_mode='MarkdownV2',
+                                     reply_to_message_id=update.message.reply_to_message.message_id)
+
+    except Exception as e:
+        traceback.print_exc()
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=f'Ошибка при определении адреса',
+                                 reply_to_message_id=update.message.reply_to_message.message_id)
 
 
 def bot_command_get_unknown_neighbours_file(update: Update, context: CallbackContext):
@@ -3213,6 +3284,9 @@ def setup_command_handlers(tg_dispatcher):
 
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
     tg_dispatcher.add_handler(revalidate_users_groups_handler)
+
+    parse_address = CommandHandler('parse_address', bot_command_parse_address)
+    tg_dispatcher.add_handler(parse_address)
 
     # Other stuff
 
