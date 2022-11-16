@@ -175,8 +175,9 @@ def parse_address(query: str) -> (str or None, int or None):
                           'Referer': 'https://www.pochta.ru/offices'
                       })
 
-    if len(r.json()) > 0:
-        el = r.json()[0]
+    results = r.json()
+    if len(results) > 0:
+        el = results[0]
         address = el['normalizedAddress']
         index = el['postalCode']
 
