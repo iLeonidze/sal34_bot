@@ -13,7 +13,6 @@ import traceback
 from typing import Dict, List, Any
 
 import emoji
-import numpy as np
 import requests
 
 from google.oauth2 import service_account
@@ -101,6 +100,21 @@ OBJECT_TYPES_NAMES = {
     'мм': 'Парковка',
     'нж': 'Помещение',
 }
+
+OBJECT_TYPES_EMOJI = {
+    'кв': '🚪',
+    'кл': '📦',
+    'мм': '🚗',
+    'нж': '🛒',
+}
+
+GROUPS_IDS_EMOJI = {
+    'private_common_group': '🏠',
+    'public_info_channel': '📢',
+    'guards_group': '👮',
+    'cleaning_group': '🧹',
+}
+
 
 TABLES_RELOADED_TIME = 0
 LAST_STALED_USER_CACHE = time.time()
@@ -1358,7 +1372,8 @@ def form_objects_list_string(user: User) -> str:
             # text += '\n' + OBJECT_TYPES_NAMES[object_type] + '\n'
             for index, object_entry in user.db_entries.loc[user.db_entries['object_type'] == object_type].iterrows():
 
-                text += '• ' + OBJECT_TYPES_NAMES[object_type].lower() + ' '
+                text += '• ' + OBJECT_TYPES_EMOJI[object_type] + ' ' \
+                        + OBJECT_TYPES_NAMES[object_type].lower() + ' '
 
                 floor_str = ''
                 if object_type == 'кв':
@@ -2344,7 +2359,18 @@ def bot_command_add_all_users_to_chat(update: Update, context: CallbackContext):
             continue
 
         chat_name = get_chat_name_by_chat(chat)
-        buttons.append([InlineKeyboardButton(f'{chat_name}',
+        if chat['name'] == 'private_section_group':
+            if chat["section"] == 's':
+                section_key = 'кл'
+            elif chat["section"] == 'p':
+                section_key = 'мм'
+            else:
+                section_key = 'кв'
+            chat_emoji = OBJECT_TYPES_EMOJI[section_key]
+        else:
+            chat_emoji = GROUPS_IDS_EMOJI[chat['name']]
+
+        buttons.append([InlineKeyboardButton(f'{chat_emoji} {chat_name}',
                                              callback_data=f'bulk_add_to_chats|{chat["id"]}')])
 
     reply_markup = InlineKeyboardMarkup(buttons, resize_keyboard=False)
@@ -3211,8 +3237,8 @@ def setup_command_handlers(tg_dispatcher):
     start_handler = CommandHandler('start', bot_command_start)
     tg_dispatcher.add_handler(start_handler)
 
-    who_handler = CommandHandler('neighbours', bot_command_neighbours)
-    tg_dispatcher.add_handler(who_handler)
+    neighbours_handler = CommandHandler('neighbours', bot_command_neighbours)
+    tg_dispatcher.add_handler(neighbours_handler)
 
     who_handler = CommandHandler('who', bot_command_who_is_this)
     tg_dispatcher.add_handler(who_handler)
