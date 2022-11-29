@@ -2359,18 +2359,8 @@ def bot_command_add_all_users_to_chat(update: Update, context: CallbackContext):
             continue
 
         chat_name = get_chat_name_by_chat(chat)
-        if chat['name'] == 'private_section_group':
-            if chat["section"] == 's':
-                section_key = 'кл'
-            elif chat["section"] == 'p':
-                section_key = 'мм'
-            else:
-                section_key = 'кв'
-            chat_emoji = OBJECT_TYPES_EMOJI[section_key]
-        else:
-            chat_emoji = GROUPS_IDS_EMOJI[chat['name']]
 
-        buttons.append([InlineKeyboardButton(f'{chat_emoji} {chat_name}',
+        buttons.append([InlineKeyboardButton(f'{chat_name}',
                                              callback_data=f'bulk_add_to_chats|{chat["id"]}')])
 
     reply_markup = InlineKeyboardMarkup(buttons, resize_keyboard=False)
@@ -3006,13 +2996,25 @@ def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> No
 
     for chat in user_related_chats:
         chat_name = get_chat_name_by_chat(chat)
-        buttons.append([InlineKeyboardButton(f'{chat_name}', callback_data=f'add_to_chats|{user.telegram_id}|{chat["id"]}')])
+
+        if chat['name'] == 'private_section_group':
+            if chat["section"] == 's':
+                section_key = 'кл'
+            elif chat["section"] == 'p':
+                section_key = 'мм'
+            else:
+                section_key = 'кв'
+            chat_emoji = OBJECT_TYPES_EMOJI[section_key]
+        else:
+            chat_emoji = GROUPS_IDS_EMOJI[chat['name']]
+
+        buttons.append([InlineKeyboardButton(f'{chat_emoji} {chat_name}', callback_data=f'add_to_chats|{user.telegram_id}|{chat["id"]}')])
 
     buttons.append([InlineKeyboardButton("Список ссылок", callback_data=f'add_to_chats|{user.telegram_id}|links')])
 
     reply_markup = InlineKeyboardMarkup(buttons, resize_keyboard=False)
     context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Выберете куда необходимо добавить пользователя "{user.get_fullname()}"',
+                             text=f'Выберите куда необходимо добавить пользователя "{user.get_fullname()}"',
                              reply_markup=reply_markup)
 
 
