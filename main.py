@@ -658,7 +658,7 @@ def rebuild_neighbours_dict_from_table(table: DataFrame) -> Dict[str, Dict[str, 
                 'position': int(row['floor_position'])
             }
 
-        if row['telegram'] != '':
+        if row['telegram']:
             user = USERS_CACHE.get_user(int(row['telegram']))
         else:
             user = [encode_markdown(row['name']), encode_markdown(row['surname'])]
@@ -1424,9 +1424,9 @@ def form_related_users_list_sting(user: User):
             fullname += f' {row["patronymic"]}'
 
         if row["telegram"]:
-            text += '\n• [' + fullname + '](tg://user?id=' + str(row["telegram"]) + ')'
+            text += '\n• [' + encode_markdown(fullname) + '](tg://user?id=' + str(row["telegram"]) + ')'
         else:
-            text += '\n• ' + fullname
+            text += '\n• ' + encode_markdown(fullname)
 
         if row["phone"]:
             text += f', `\\+{row["phone"]}`'
