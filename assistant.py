@@ -6,7 +6,7 @@ from typing import Dict, Callable
 import yaml
 from telegram import Update
 from telegram.ext import CallbackContext
-from telegram.ext.commandhandler import CommandHandler
+from telegram.ext import CommandHandler
 
 help_file_path = './help.yaml'
 

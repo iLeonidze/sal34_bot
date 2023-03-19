@@ -1,0 +1,11 @@
+version: '3'
+services:
+  app:
+    image: sal34_bot
+    restart: always
+    volumes:
+      - ./buildings:/opt/bot/buildings
+      - ./configs:/opt/bot/configs
+      - ./data:/opt/bot/data
+      - ./stats:/opt/bot/stats
+      - ./users:/opt/bot/users

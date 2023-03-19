@@ -22,10 +22,10 @@ from googleapiclient.errors import HttpError
 import pandas as pd
 from pandas import DataFrame
 
-from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler, \
-    CallbackQueryHandler
+from telegram.ext import MessageHandler, CallbackContext, CommandHandler, \
+    CallbackQueryHandler, ApplicationBuilder, Application, filters
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, \
-    InlineKeyboardButton, Bot, ForceReply, TelegramError, ChatMember
+    InlineKeyboardButton, Bot, ForceReply, ChatMember
 
 import logging
 
@@ -47,7 +47,6 @@ CACHES_STALE_TIMER = None
 ACTIONS_QUEUE_TIMER = None
 USERS_CONTEXT_SAVE_TIMER = None
 GOOGLE_CREDENTIALS = None
-TG_UPDATER = None
 TG_BOT: Bot or None = None
 TG_CLIENT: TelegramClient
 
@@ -464,7 +463,7 @@ class User:
             if chat['name'] in ['private_common_group', 'public_info_channel', 'guards_group', 'cleaning_group']:
                 chats.append(chat)
 
-        return list({v['id']:v for v in chats}.values())
+        return list({v['id']: v for v in chats}.values())
 
     def get_related_chats_ids(self) -> List[int]:
         chats_ids = []
@@ -632,7 +631,7 @@ def is_user_added_to_groups(telegram_id: int, groups_ids: List[int]) -> bool:
             result = TG_BOT.get_chat_member(group_id, telegram_id)
             if not isinstance(result, ChatMember) or result.status not in ['member', 'administrator', 'creator']:
                 return False
-        except TelegramError as e:
+        except Exception:
             return False
     return True
 
@@ -931,7 +930,7 @@ async def _tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
     client_api_id = CONFIGS['service']['identity']['telegram']['client_api_id']
     client_api_hash = CONFIGS['service']['identity']['telegram']['client_api_hash']
 
-    client: TelegramClient = TelegramClient('sal34_bot_client',
+    client: TelegramClient = TelegramClient('configs/telegram_client',
                                             client_api_id,
                                             client_api_hash,
                                             loop=loop)
@@ -1068,7 +1067,7 @@ def reload_configs():
     global CONFIGS
     global DB
 
-    with open('service.json', 'r') as s:
+    with open('configs/service.json', 'r') as s:
         CONFIGS['service'] = json.load(s)
 
     for building_file in os.listdir('./buildings'):
@@ -1171,7 +1170,7 @@ def identify_chat_by_tg_update(update: Update) -> (bool, str, bool, str, list or
                 building_chats = building_config['groups']
 
                 chat_name = group['name']
-                
+
                 if group.get('section'):
                     chat_section = group['section']
 
@@ -3228,102 +3227,102 @@ def handle_button_callback(update: Update, context: CallbackContext) -> None:
     callback_functions[function_name](update, context, *payload)
 
 
-def setup_command_handlers(tg_dispatcher):
+def setup_command_handlers(application: Application):
 
-    tg_dispatcher.add_handler(MessageHandler(Filters.all, stats_collector), group=-1)
+    application.add_handler(MessageHandler(filters.ALL, stats_collector), group=-1)
 
-    tg_dispatcher.add_handler(MessageHandler(Filters.all, bot_assistant_call), group=-2)
+    application.add_handler(MessageHandler(filters.ALL, bot_assistant_call), group=-2)
 
-    tg_dispatcher.add_handler(MessageHandler(Filters.all, bot_added_user_handler), group=-3)
+    application.add_handler(MessageHandler(filters.ALL, bot_added_user_handler), group=-3)
 
     start_handler = CommandHandler('start', bot_command_start)
-    tg_dispatcher.add_handler(start_handler)
+    application.add_handler(start_handler)
 
     neighbours_handler = CommandHandler('neighbours', bot_command_neighbours)
-    tg_dispatcher.add_handler(neighbours_handler)
+    application.add_handler(neighbours_handler)
 
     who_handler = CommandHandler('who', bot_command_who_is_this)
-    tg_dispatcher.add_handler(who_handler)
+    application.add_handler(who_handler)
 
     stats_handler = CommandHandler('stats', bot_command_stats)
-    tg_dispatcher.add_handler(stats_handler)
+    application.add_handler(stats_handler)
 
     help_handler = CommandHandler('help', bot_command_help)
-    tg_dispatcher.add_handler(help_handler)
+    application.add_handler(help_handler)
 
     # TODO: remove this old menu
     help_assistant_handler = CommandHandler('assistant_help', bot_command_help)
-    tg_dispatcher.add_handler(help_assistant_handler)
+    application.add_handler(help_assistant_handler)
 
     # Admin commands
 
     reload_db_handler = CommandHandler('reload', bot_command_reload)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     # reload_db_handler = CommandHandler('reload_db', bot_command_reload_db)
     # tg_dispatcher.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('start_tables_sync', bot_command_start_tables_sync)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('stop_tables_sync', bot_command_stop_tables_sync)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('flush_users_context', bot_command_flush_users_context)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('flush_all_users_context', bot_command_flush_all_users_context)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('start_users_context_autosave', bot_command_start_users_context_autosave)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('stop_users_context_autosave', bot_command_stop_users_context_autosave)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('start_cached_users_stale', bot_command_start_cached_users_stale)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('stop_cached_users_stale', bot_command_stop_cached_users_stale)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('recalculate_stats', bot_command_recalculate_stats)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('reset_actions_queue', bot_command_reset_actions_queue)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('start_actions_queue', bot_command_start_actions_queue)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('stop_actions_queue', bot_command_stop_actions_queue)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('add_all_users_to_chats', bot_command_add_all_users_to_chats)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     reload_db_handler = CommandHandler('add_all_users_to_chat', bot_command_add_all_users_to_chat)
-    tg_dispatcher.add_handler(reload_db_handler)
+    application.add_handler(reload_db_handler)
 
     get_unknown_neighbours_db = CommandHandler('get_unknown_neighbours_file', bot_command_get_unknown_neighbours_file)
-    tg_dispatcher.add_handler(get_unknown_neighbours_db)
+    application.add_handler(get_unknown_neighbours_db)
 
     get_potential_neighbours_issues = CommandHandler('get_potential_neighbours_issues', bot_command_get_potential_neighbours_issues)
-    tg_dispatcher.add_handler(get_potential_neighbours_issues)
+    application.add_handler(get_potential_neighbours_issues)
 
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
-    tg_dispatcher.add_handler(revalidate_users_groups_handler)
+    application.add_handler(revalidate_users_groups_handler)
 
-    parse_address = CommandHandler('parse_address', bot_command_parse_address)
-    tg_dispatcher.add_handler(parse_address)
+    parse_address_handler = CommandHandler('parse_address', bot_command_parse_address)
+    application.add_handler(parse_address_handler)
 
     # Other stuff
 
-    tg_dispatcher.add_handler(MessageHandler(Filters.text |
-                                             Filters.sticker |
-                                             Filters.animation, no_command_handler))
+    application.add_handler(MessageHandler(filters.TEXT |
+                                             filters.Sticker.ALL |
+                                             filters.ANIMATION, no_command_handler))
 
-    tg_dispatcher.add_handler(CallbackQueryHandler(handle_button_callback))
+    application.add_handler(CallbackQueryHandler(handle_button_callback))
 
 
 def start_telegram_client():
@@ -3339,18 +3338,16 @@ def start_telegram_client():
 
 
 def serve_telegram_requests():
-    global TG_UPDATER
     global TG_BOT
 
-    TG_UPDATER = Updater(token=CONFIGS['service']['identity']['telegram']['bot_token'],
-                         use_context=True)
+    application: Application = ApplicationBuilder(). \
+        token(token=CONFIGS['service']['identity']['telegram']['bot_token']).build()
 
-    tg_dispatcher = TG_UPDATER.dispatcher
-    TG_BOT = tg_dispatcher.bot
+    TG_BOT = application.bot
 
-    setup_command_handlers(tg_dispatcher)
+    setup_command_handlers(application)
 
-    TG_UPDATER.start_polling()
+    application.run_polling()
 
 
 def signal_handler(sig, frame):

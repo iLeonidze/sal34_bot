@@ -1,0 +1,23 @@
+name: Docker Image
+on:
+  push:
+    branches:
+      - 'main'
+    tags:
+      - '*'
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+      - name: Build Docker Image
+        run: docker build -t sal34_bot --no-cache .
+      - name: Publish to ghcr.io
+        run: |
+          IMAGE_TAG=$(echo "${{ github.ref_name }}" | sed 's/\//_/g')
+          IMAGE_NAME=ghcr.io/iLeonidze/sal34_bot:$IMAGE_TAG
+          docker tag sal34_bot $IMAGE_NAME
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login https://ghcr.io -u $GITHUB_ACTOR --password-stdin
+          docker push $IMAGE_NAME
