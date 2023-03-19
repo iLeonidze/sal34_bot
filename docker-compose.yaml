@@ -1,7 +1,7 @@
 version: '3'
 services:
   app:
-    image: sal34_bot
+    image: ghcr.io/ileonidze/sal34_bot:latest
     restart: always
     volumes:
       - ./buildings:/opt/bot/buildings
