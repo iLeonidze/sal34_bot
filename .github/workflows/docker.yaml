@@ -18,6 +18,7 @@ jobs:
         run: |
           IMAGE_TAG=$(echo "${{ github.ref_name }}" | sed 's/\//_/g')
           IMAGE_NAME=ghcr.io/ileonidze/sal34_bot:$IMAGE_TAG
+          if [ $IMAGE_TAG -eq "main" ]; then IMAGE_TAG="latest"; fi
           docker tag sal34_bot $IMAGE_NAME
           echo ${{ secrets.GITHUB_TOKEN }} | docker login https://ghcr.io -u $GITHUB_ACTOR --password-stdin
           docker push $IMAGE_NAME
