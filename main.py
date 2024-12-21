@@ -164,6 +164,28 @@ def is_repeated_symbol(s):
     return len(set(s.lower())) == 1
 
 
+def private_or_known_chat_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        is_found_chat, _, _, _, _, _ = identify_chat_by_tg_update(update)
+        if update.effective_chat.type != 'private' and not is_found_chat:
+            await bot_send_message_this_command_bot_not_allowed_here(update, context)
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+
+def known_chat_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        is_found_chat, _, _, _, _, _ = identify_chat_by_tg_update(update)
+        if not is_found_chat:
+            await bot_send_message_this_command_bot_not_allowed_here(update, context)
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+
 def admin_chat_only(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
@@ -181,6 +203,16 @@ def authorized_only(func):
         user = USERS_CACHE.get_user(update)
         if not user.is_identified():
             await bot_send_message_user_not_authorized(update, context)
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+
+def ignore_unauthorized(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        user = USERS_CACHE.get_user(update)
+        if not user.is_identified():
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
@@ -1387,18 +1419,15 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
 
 
 @authorized_only
+@private_or_known_chat_only
 async def bot_command_neighbours(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
-    if update.effective_chat.type != 'private' and not is_found_chat:
-        await bot_send_message_this_command_bot_not_allowed_here(update, context)
-        return
-
     if is_admin_chat:
         if update.message.reply_to_message:
-            requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_from.id)
+            requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_origin.sender_user.id)
             neighbours = requested_user.get_neighbours()
         else:
             neighbours = USERS_CACHE.get_neighbours_from_section(chat_building)
@@ -1410,7 +1439,7 @@ async def bot_command_neighbours(update: Update, context: CallbackContext):
     elif not chat_section:
         is_private = update.effective_chat.type == 'private'
         if update.message.reply_to_message:
-            requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_from.id)
+            requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_origin.sender_user.id)
             neighbours = requested_user.get_neighbours()
             if neighbours:
                 text = f'{requested_user.get_linked_shortname()} имеет ближайших соседей:\n' \
@@ -1431,7 +1460,7 @@ async def bot_command_neighbours(update: Update, context: CallbackContext):
                     text = 'К сожалению, у Вас еще нет соседей рядом'
     else:
         if update.message.reply_to_message:
-            requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_from.id)
+            requested_user = USERS_CACHE.get_user(update.message.reply_to_message.forward_origin.sender_user.id)
             neighbours = requested_user.get_neighbours(section=chat_section)
             if neighbours:
                 text = f'{requested_user.get_linked_shortname()} имеет ближайших соседей:\n' \
@@ -1454,18 +1483,12 @@ async def bot_command_neighbours(update: Update, context: CallbackContext):
                                        protect_content=True)
 
 
+@authorized_only
+@private_or_known_chat_only
 async def bot_command_who_is_this(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
-
-    if update.effective_chat.type != 'private' and not is_found_chat:
-        await bot_send_message_this_command_bot_not_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
 
     requested_user: User or int or None = None
     reply_to_message_id = None
@@ -1652,19 +1675,12 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
                                    reply_markup=reply_markup)
 
 
+@authorized_only
+@known_chat_only
+# TODO: allow users for asking stats in private messages
 async def bot_command_stats(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    # TODO: allow users for asking stats in private messages
-    if not is_found_chat:
-        await bot_send_message_this_command_bot_not_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
 
     text = ''
     table = DB[chat_building]
@@ -1761,30 +1777,18 @@ async def raw_try_send_user_link(update: Update, context: CallbackContext) -> Us
     return -1
 
 
+@authorized_only
 async def bot_command_help(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
-    commands = [
-        ['help', 'Выводит это сообщение о том как пользоваться ботом'],
-        ['neighbours',
-         'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете (в общем чате это не работает)'],
-        ['who',
-         'Узнать информацию о соседе или о себе\nНеобходимо вызывать эту команду ответив на чье-то сообщение, информацию о котором Вы хотите узнать. Вызов в общем чате покажет из какой секции, вызов в секции покажет с какого этажа и номер объекта недвижимости. Если вызвать команду без реплая, то будет выведена информация о Вас.'],
-        ['stats',
-         'Общая статистика по дому или секции\nВ общем чате показывает сколько соседей добавлено в базу, в чате секции показывает количество жильцов на каждом этаже'],
-    ]
 
     admin_commands = [
         ['who',
-         'Выводит всю информацию о человеке по одному из заданных параметров:\n- Сообщение\n- Форвард сообщения\n- Контакт\n- Username\n- Номер телефона\n- Номер телефона вне нашей базы\n- ID телеграма'],
+         'Выводит всю информацию о человеке по одному из заданных параметров:\n- Сообщение\n- Форвард сообщения\n- '
+         'Контакт\n- Username\n- Номер телефона\n- Номер телефона вне нашей базы\n- ID телеграма'],
         ['reload',
-         'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы (это действие высвободит память, но может привести к снижению производительности бота)'],
+         'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы (это действие высвободит '
+         'память, но может привести к снижению производительности бота)'],
         # ['reload_db', 'Вызывает принудительную синхронизацию всех таблиц БД'],
         ['start_tables_sync', 'Начинает синхронизацию таблиц БД'],
         ['stop_tables_sync', 'Останавливает синхронизацию таблиц БД'],
@@ -1812,7 +1816,9 @@ async def bot_command_help(update: Update, context: CallbackContext):
     ]
 
     message = encode_markdown(
-        'В чатах дома есть бот-ассистент, который помогает соседям. Боту можно написать в личные сообщения. В чате также можно задать интересующий вас вопрос: напишите обычное сообщение со своим вопросом, а в начале сообщение не забудьте позвать бота написав "Бот, ххх?"\n\nВот на что бот умеет отвечать:')
+        'В чатах дома есть бот-ассистент, который помогает соседям. Боту можно написать в личные сообщения. В чате '
+        'также можно задать интересующий вас вопрос: напишите обычное сообщение со своим вопросом, а в начале '
+        'сообщение не забудьте позвать бота написав "Бот, ххх?"\n\nВот на что бот умеет отвечать:')
 
     global HELP_ASSISTANT
     for entry in HELP_ASSISTANT.db:
@@ -1834,19 +1840,9 @@ async def bot_command_help(update: Update, context: CallbackContext):
                                        parse_mode='MarkdownV2')
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_reload_db(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_not_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested tables force reload!')
 
     reload_tables()
@@ -2008,18 +2004,10 @@ async def bot_command_stop_actions_queue(update: Update, context: CallbackContex
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_revalidate_users_groups(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_not_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
+    is_found_chat, chat_building, _, _, _, _ = identify_chat_by_tg_update(update)
 
     logging.debug('Admin requested to revalidate all users in groups!')
 
@@ -2054,19 +2042,10 @@ async def bot_command_revalidate_users_groups(update: Update, context: CallbackC
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_add_all_users_to_chat(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_not_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
+    is_found_chat, chat_building, _, _, _, _ = identify_chat_by_tg_update(update)
 
     buttons = []
 
@@ -2085,18 +2064,10 @@ async def bot_command_add_all_users_to_chat(update: Update, context: CallbackCon
                                    reply_markup=reply_markup)
 
 
+@authorized_only
+@admin_chat_only
 async def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_args):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_not_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
+    is_found_chat, chat_building, _, _, _, _ = identify_chat_by_tg_update(update)
 
     if len(input_args) == 1:
         requested_chat_id = input_args[0]
@@ -2222,14 +2193,9 @@ async def stats_collector(update: Update, context: CallbackContext):
     return False
 
 
+@ignore_unauthorized
 async def bot_assistant_call(update: Update, context: CallbackContext):
-    # is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-    #     = identify_chat_by_tg_update(update)
-
     user = USERS_CACHE.get_user(update)
-
-    if not user.is_identified():
-        return
 
     # if user requested bot in personal messages, building_chats will be None
     building_chats = CONFIGS['buildings'][user.building]['groups']
@@ -2265,13 +2231,9 @@ async def no_command_handler(update: Update, context: CallbackContext) -> None:
         return
 
 
+@authorized_only
+@admin_chat_only
 async def cb_change_fullname(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat and update.message.chat.type != 'private':
-        return
-
     try:
         user: User = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2306,13 +2268,9 @@ async def cb_change_fullname(update: Update, context: CallbackContext, *input_ar
                                    reply_markup=ForceReply(force_reply=True))
 
 
+@authorized_only
+@admin_chat_only
 async def cb_change_user_type(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat and update.message.chat.type != 'private':
-        return
-
     try:
         user: User = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2353,13 +2311,9 @@ async def cb_change_user_type(update: Update, context: CallbackContext, *input_a
                                    reply_markup=keyboard)
 
 
+@authorized_only
+@admin_chat_only
 async def cb_change_phone(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat and update.message.chat.type != 'private':
-        return
-
     try:
         user: User = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2390,13 +2344,9 @@ async def cb_change_phone(update: Update, context: CallbackContext, *input_args)
                                    parse_mode='MarkdownV2')
 
 
+@authorized_only
+@admin_chat_only
 async def cb_change_phone_visibility(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat and update.message.chat.type != 'private':
-        return
-
     try:
         user: User = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2458,13 +2408,9 @@ def get_chat_name_by_chat(chat) -> str:
     return chat_name
 
 
+@authorized_only
+@admin_chat_only
 async def cb_add_to_chats(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat and update.message.chat.type != 'private':
-        return
-
     try:
         user: User = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2554,13 +2500,9 @@ async def cb_add_to_chats(update: Update, context: CallbackContext, *input_args)
                                    reply_markup=reply_markup)
 
 
+@authorized_only
+@admin_chat_only
 async def cb_remove_from_chats(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat and update.message.chat.type != 'private':
-        return
-
     try:
         user: User = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2609,13 +2551,9 @@ async def cb_remove_from_chats(update: Update, context: CallbackContext, *input_
                                    reply_markup=reply_markup)
 
 
+@authorized_only
+@admin_chat_only
 async def cb_lock_bot_access(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat:
-        return
-
     try:
         user = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2639,13 +2577,9 @@ async def cb_lock_bot_access(update: Update, context: CallbackContext, *input_ar
                                    reply_markup=reply_markup)
 
 
+@authorized_only
+@admin_chat_only
 async def cb_lock_bot_access_submit(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat:
-        return
-
     try:
         user = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2664,13 +2598,9 @@ async def cb_lock_bot_access_submit(update: Update, context: CallbackContext, *i
                                    text=f'Доступ к боту отозван у жителя "{fullname}"')
 
 
+@authorized_only
+@admin_chat_only
 async def cb_deactivate_user(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat:
-        return
-
     try:
         user = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2694,13 +2624,9 @@ async def cb_deactivate_user(update: Update, context: CallbackContext, *input_ar
                                    reply_markup=reply_markup)
 
 
+@authorized_only
+@admin_chat_only
 async def cb_deactivate_user_submit(update: Update, context: CallbackContext, *input_args) -> None:
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    if not is_admin_chat:
-        return
-
     try:
         user = USERS_CACHE.get_user(int(input_args[0]))
     except Exception:
@@ -2792,50 +2718,50 @@ def setup_command_handlers(application: Application):
 
     # Admin commands
 
-    reload_db_handler = CommandHandler('reload', bot_command_reload)
-    application.add_handler(reload_db_handler)
+    reload_handler = CommandHandler('reload', bot_command_reload)
+    application.add_handler(reload_handler)
 
     # reload_db_handler = CommandHandler('reload_db', bot_command_reload_db)
     # tg_dispatcher.add_handler(reload_db_handler)
 
-    reload_db_handler = CommandHandler('start_tables_sync', bot_command_start_tables_sync)
-    application.add_handler(reload_db_handler)
+    start_tables_sync_handler = CommandHandler('start_tables_sync', bot_command_start_tables_sync)
+    application.add_handler(start_tables_sync_handler)
 
-    reload_db_handler = CommandHandler('stop_tables_sync', bot_command_stop_tables_sync)
-    application.add_handler(reload_db_handler)
+    stop_tables_sync_handler = CommandHandler('stop_tables_sync', bot_command_stop_tables_sync)
+    application.add_handler(stop_tables_sync_handler)
 
-    reload_db_handler = CommandHandler('flush_users_context', bot_command_flush_users_context)
-    application.add_handler(reload_db_handler)
+    flush_users_context_handler = CommandHandler('flush_users_context', bot_command_flush_users_context)
+    application.add_handler(flush_users_context_handler)
 
-    reload_db_handler = CommandHandler('flush_all_users_context', bot_command_flush_all_users_context)
-    application.add_handler(reload_db_handler)
+    flush_all_users_context_handler = CommandHandler('flush_all_users_context', bot_command_flush_all_users_context)
+    application.add_handler(flush_all_users_context_handler)
 
-    reload_db_handler = CommandHandler('start_users_context_autosave', bot_command_start_users_context_autosave)
-    application.add_handler(reload_db_handler)
+    start_users_context_autosave_handler = CommandHandler('start_users_context_autosave', bot_command_start_users_context_autosave)
+    application.add_handler(start_users_context_autosave_handler)
 
-    reload_db_handler = CommandHandler('stop_users_context_autosave', bot_command_stop_users_context_autosave)
-    application.add_handler(reload_db_handler)
+    stop_users_context_autosave_handler = CommandHandler('stop_users_context_autosave', bot_command_stop_users_context_autosave)
+    application.add_handler(stop_users_context_autosave_handler)
 
-    reload_db_handler = CommandHandler('start_cached_users_stale', bot_command_start_cached_users_stale)
-    application.add_handler(reload_db_handler)
+    start_cached_users_stale_handler = CommandHandler('start_cached_users_stale', bot_command_start_cached_users_stale)
+    application.add_handler(start_cached_users_stale_handler)
 
-    reload_db_handler = CommandHandler('stop_cached_users_stale', bot_command_stop_cached_users_stale)
-    application.add_handler(reload_db_handler)
+    stop_cached_users_stale_handler = CommandHandler('stop_cached_users_stale', bot_command_stop_cached_users_stale)
+    application.add_handler(stop_cached_users_stale_handler)
 
-    reload_db_handler = CommandHandler('recalculate_stats', bot_command_recalculate_stats)
-    application.add_handler(reload_db_handler)
+    recalculate_stats_handler = CommandHandler('recalculate_stats', bot_command_recalculate_stats)
+    application.add_handler(recalculate_stats_handler)
 
-    reload_db_handler = CommandHandler('reset_actions_queue', bot_command_reset_actions_queue)
-    application.add_handler(reload_db_handler)
+    reset_actions_queue_handler = CommandHandler('reset_actions_queue', bot_command_reset_actions_queue)
+    application.add_handler(reset_actions_queue_handler)
 
-    reload_db_handler = CommandHandler('start_actions_queue', bot_command_start_actions_queue)
-    application.add_handler(reload_db_handler)
+    start_actions_queue_handler = CommandHandler('start_actions_queue', bot_command_start_actions_queue)
+    application.add_handler(start_actions_queue_handler)
 
-    reload_db_handler = CommandHandler('stop_actions_queue', bot_command_stop_actions_queue)
-    application.add_handler(reload_db_handler)
+    stop_actions_queue_handler = CommandHandler('stop_actions_queue', bot_command_stop_actions_queue)
+    application.add_handler(stop_actions_queue_handler)
 
-    reload_db_handler = CommandHandler('add_all_users_to_chat', bot_command_add_all_users_to_chat)
-    application.add_handler(reload_db_handler)
+    add_all_users_to_chat_handler = CommandHandler('add_all_users_to_chat', bot_command_add_all_users_to_chat)
+    application.add_handler(add_all_users_to_chat_handler)
 
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
     application.add_handler(revalidate_users_groups_handler)
@@ -2906,8 +2832,8 @@ async def on_exit():
     logging.info('Stopping users context save...')
     stop_users_context_save()
 
-    # logging.info('Stopping telegram client...')
-    # TG_CLIENT.disconnect()
+    logging.info('Stopping telegram client...')
+    TG_CLIENT.disconnect()
 
     logging.info('Please wait until caches evicted...')
     USERS_CACHE.evict()
