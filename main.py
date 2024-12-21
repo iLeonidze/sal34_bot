@@ -2,13 +2,12 @@ from __future__ import print_function, annotations
 
 import asyncio
 import datetime
-import inspect
 import json
 import math
 import os.path
 import time
-import threading
 import traceback
+from asyncio import Task
 from typing import Dict, List, Any
 
 import emoji
@@ -38,10 +37,10 @@ from assistant import HelpAssistant, is_bot_assistant_request
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-TABLES_SYNC_TIMER = None
-CACHES_STALE_TIMER = None
-ACTIONS_QUEUE_TIMER = None
-USERS_CONTEXT_SAVE_TIMER = None
+TABLES_SYNC_TASK: None or Task = None
+CACHES_STALE_TASK: None or Task = None
+ACTIONS_QUEUE_TASK: None or Task = None
+USERS_CONTEXT_SAVE_TASK: None or Task = None
 GOOGLE_CREDENTIALS = None
 TG_BOT: Bot
 TG_CLIENT: TelegramClient
@@ -183,28 +182,6 @@ def is_bot_started_in_obj_details(obj_details):
             return 'ЗАПУЩЕН, ТОЛЬКО У АРЕНДАТОРА'
 
     return 'НЕ ЗАПУЩЕН'
-
-
-class SetInterval:
-    def __init__(self, action, interval):
-        self.interval = interval
-        self.action = action
-        self.stopEvent = threading.Event()
-        thread = threading.Thread(target=self.__set_interval)
-        thread.start()
-
-    def __set_interval(self):
-        next_time = time.time() + self.interval
-        while not self.stopEvent.wait(next_time - time.time()):
-            next_time += self.interval
-            if inspect.iscoroutinefunction(self.action):
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self.action())
-            else:
-                self.action()
-
-    def cancel(self):
-        self.stopEvent.set()
 
 
 class User:
@@ -356,7 +333,7 @@ class User:
                 logging.error(f'!!! Failed to read user data {self.telegram_id} !!!')
 
     def delayed_context_save(self):
-        if USERS_CONTEXT_SAVE_TIMER is not None:
+        if USERS_CONTEXT_SAVE_TASK is not None:
             self.cache.schedule_user_context_save(self)
         else:
             logging.debug(f'Autosave disabled, saving {self.telegram_id} synchronously...')
@@ -1058,31 +1035,42 @@ def identify_chat_by_tg_update(update: Update) -> (bool, str, bool, str, list or
     return is_found, found_building_number, is_admin_chat, chat_name, chat_section, building_chats
 
 
-def start_tables_sync():
-    reload_tables()
-    global TABLES_SYNC_TIMER
-    if not TABLES_SYNC_TIMER or not isinstance(TABLES_SYNC_TIMER, SetInterval):
-        TABLES_SYNC_TIMER = SetInterval(reload_tables, CONFIGS['service']['scheduler']['sync_interval'])
+async def reload_tables_periodically():
+    while True:
+        reload_tables()
+        await asyncio.sleep(CONFIGS['service']['scheduler']['sync_interval'])
 
 
-def stop_tables_sync():
-    global TABLES_SYNC_TIMER
-    if TABLES_SYNC_TIMER and isinstance(TABLES_SYNC_TIMER, SetInterval):
-        TABLES_SYNC_TIMER.cancel()
-        TABLES_SYNC_TIMER = None
+def start_tables_synchronization():
+    global TABLES_SYNC_TASK
+    if TABLES_SYNC_TASK is None:
+        TABLES_SYNC_TASK = asyncio.create_task(reload_tables_periodically())
+
+
+def stop_tables_synchronization():
+    global TABLES_SYNC_TASK
+    if TABLES_SYNC_TASK is not None:
+        TABLES_SYNC_TASK.cancel()
+        TABLES_SYNC_TASK = None
+
+
+async def stale_caches_periodically():
+    while True:
+        USERS_CACHE.stale()
+        await asyncio.sleep(1)
 
 
 def start_caches_stale():
-    global CACHES_STALE_TIMER
-    if not CACHES_STALE_TIMER or not isinstance(CACHES_STALE_TIMER, SetInterval):
-        CACHES_STALE_TIMER = SetInterval(USERS_CACHE.stale, 1)
+    global CACHES_STALE_TASK
+    if CACHES_STALE_TASK is None:
+        CACHES_STALE_TASK = asyncio.create_task(stale_caches_periodically())
 
 
 def stop_caches_stale():
-    global CACHES_STALE_TIMER
-    if CACHES_STALE_TIMER and isinstance(CACHES_STALE_TIMER, SetInterval):
-        CACHES_STALE_TIMER.cancel()
-        CACHES_STALE_TIMER = None
+    global CACHES_STALE_TASK
+    if CACHES_STALE_TASK is not None:
+        CACHES_STALE_TASK.cancel()
+        CACHES_STALE_TASK = None
 
 
 def reset_actions_queue():
@@ -1090,30 +1078,42 @@ def reset_actions_queue():
     QUEUED_ACTIONS = []
 
 
+async def proceed_actions_queue_periodically():
+    while True:
+        await proceed_actions_queue()
+        await asyncio.sleep(1)
+
+
 def start_actions_queue():
-    global ACTIONS_QUEUE_TIMER
-    if not ACTIONS_QUEUE_TIMER or not isinstance(ACTIONS_QUEUE_TIMER, SetInterval):
-        ACTIONS_QUEUE_TIMER = SetInterval(proceed_actions_queue, 1)
+    global ACTIONS_QUEUE_TASK
+    if ACTIONS_QUEUE_TASK is None:
+        ACTIONS_QUEUE_TASK = asyncio.create_task(proceed_actions_queue_periodically())
 
 
 def stop_actions_queue():
-    global ACTIONS_QUEUE_TIMER
-    if ACTIONS_QUEUE_TIMER and isinstance(ACTIONS_QUEUE_TIMER, SetInterval):
-        ACTIONS_QUEUE_TIMER.cancel()
-        ACTIONS_QUEUE_TIMER = None
+    global ACTIONS_QUEUE_TASK
+    if ACTIONS_QUEUE_TASK is not None:
+        ACTIONS_QUEUE_TASK.cancel()
+        ACTIONS_QUEUE_TASK = None
+
+
+async def proceed_users_context_save_periodically():
+    while True:
+        proceed_users_context_save()
+        await asyncio.sleep(1)
 
 
 def start_users_context_save():
-    global USERS_CONTEXT_SAVE_TIMER
-    if not USERS_CONTEXT_SAVE_TIMER or not isinstance(USERS_CONTEXT_SAVE_TIMER, SetInterval):
-        USERS_CONTEXT_SAVE_TIMER = SetInterval(proceed_users_context_save, 1)
+    global USERS_CONTEXT_SAVE_TASK
+    if USERS_CONTEXT_SAVE_TASK is None:
+        USERS_CONTEXT_SAVE_TASK = asyncio.create_task(proceed_users_context_save_periodically())
 
 
 def stop_users_context_save():
-    global USERS_CONTEXT_SAVE_TIMER
-    if USERS_CONTEXT_SAVE_TIMER and isinstance(USERS_CONTEXT_SAVE_TIMER, SetInterval):
-        USERS_CONTEXT_SAVE_TIMER.cancel()
-        USERS_CONTEXT_SAVE_TIMER = None
+    global USERS_CONTEXT_SAVE_TASK
+    if USERS_CONTEXT_SAVE_TASK is not None:
+        USERS_CONTEXT_SAVE_TASK.cancel()
+        USERS_CONTEXT_SAVE_TASK = None
 
 
 async def proceed_actions_queue():
@@ -1894,7 +1894,7 @@ async def bot_command_start_tables_sync(update: Update, context: CallbackContext
 
     logging.debug('Admin requested tables sync start!')
 
-    start_tables_sync()
+    start_tables_synchronization()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text='Синхронизация таблиц запущена',
@@ -1916,7 +1916,7 @@ async def bot_command_stop_tables_sync(update: Update, context: CallbackContext)
 
     logging.debug('Admin requested tables sync stop!')
 
-    stop_tables_sync()
+    stop_tables_synchronization()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text='Синхронизация таблиц остановлена',
@@ -2358,20 +2358,16 @@ async def bot_assistant_call(update: Update, context: CallbackContext):
         await HELP_ASSISTANT.proceed_request(update, context, user, building_chats)
 
 
+async def remove_message_after_time(chat_id, message_id):
+    await asyncio.sleep(30)
+    logging.debug('Deleting message with added users list')
+    await TG_BOT.delete_message(chat_id=chat_id, message_id=message_id)
+
+
 async def bot_added_user_handler(update: Update, context: CallbackContext):
-    if update.message and \
-            update.message.new_chat_members and \
-            len(update.message.new_chat_members) > 0:
+    if update.message and update.message.new_chat_members and len(update.message.new_chat_members) > 0:
         logging.debug('Users added found')
-
-        def remove_message():
-            logging.debug('Deleting message with added users list')
-            interval.cancel()
-            asyncio.run(TG_BOT.delete_message(chat_id=update.message.chat_id,
-                                              message_id=update.message.message_id))
-
-        interval = SetInterval(remove_message, 30)
-    pass
+        await asyncio.create_task(remove_message_after_time(update.message.chat_id, update.message.message_id))
 
 
 async def no_command_handler(update: Update, context: CallbackContext) -> None:
@@ -2993,10 +2989,10 @@ def serve_telegram_requests():
 
     builder = ApplicationBuilder()
     builder.token(token=CONFIGS['service']['identity']['telegram']['bot_token'])
-    builder.connection_pool_size(50000)
-    builder.get_updates_connection_pool_size(50000)
-    builder.pool_timeout(100)
-    builder.get_updates_pool_timeout(100)
+    # builder.connection_pool_size(50000)
+    # builder.get_updates_connection_pool_size(50000)
+    # builder.pool_timeout(100)
+    # builder.get_updates_pool_timeout(100)
 
     application: Application = builder.build()
 
@@ -3009,7 +3005,7 @@ def serve_telegram_requests():
 
 def on_exit():
     logging.info('Stopping tables sync...')
-    stop_tables_sync()
+    stop_tables_synchronization()
 
     logging.info('Stopping actions queue...')
     stop_actions_queue()
@@ -3036,7 +3032,7 @@ def main():
         start_actions_queue()
         start_users_context_save()
         connect_google_service()
-        start_tables_sync()
+        start_tables_synchronization()
         start_caches_stale()
         logging.info('Bot started')
         serve_telegram_requests()
