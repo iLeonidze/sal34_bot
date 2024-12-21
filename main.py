@@ -884,7 +884,7 @@ async def _tg_client_get_entity_id(entity_query: int or str) -> int or None:
         entity = await TG_CLIENT.get_entity(entity_query)
         if entity and entity.id:
             return entity.id
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -900,6 +900,7 @@ async def tg_client_get_user_id_by_phone(phone: str) -> int or None:
     if result is not None:
         return result
 
+    # Search by phone number in TG client is prohibited due to Telegram anti-fraud limits
     return None
 
 
@@ -1471,6 +1472,11 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
 
     if is_admin_chat:
         requested_user = await raw_try_send_user_link(update, context)
+        if requested_user == 'not found':
+            await context.bot.send_message(chat_id=update.effective_chat.id,
+                                           text="Не удалось определить пользователя",
+                                           reply_to_message_id=update.message.reply_to_message.message_id)
+            return
 
     if isinstance(requested_user, int):
         requested_user_id = requested_user
@@ -1552,13 +1558,6 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
             text += 'Скрыт'
         else:
             text += 'Виден'
-
-        text += '\nАдрес для уведомлений: '
-        if requested_user.notification:
-            text += '\n' + '`' + requested_user.notification['address'] + ' (' + requested_user.notification[
-                'index'] + ')`'
-        else:
-            text += 'Нет'
 
         status_str, added_everywhere = await requested_user.get_str_user_related_groups_status()
         text += '\n\n' + status_str
@@ -1725,7 +1724,7 @@ async def bot_command_stats(update: Update, context: CallbackContext):
                                    reply_to_message_id=update.message.message_id)
 
 
-async def raw_try_send_user_link(update: Update, context: CallbackContext) -> User or int or None:
+async def raw_try_send_user_link(update: Update, context: CallbackContext) -> User or int or None or str:
     text = None
 
     if update.message.reply_to_message:
@@ -1738,6 +1737,8 @@ async def raw_try_send_user_link(update: Update, context: CallbackContext) -> Us
         user = await tg_client_get_user_by_username(text)
         if user:
             return user
+        else:
+            return 'not found'
 
     user_id = text.replace('+', '')
     if not user_id.isdigit():
@@ -2848,7 +2849,7 @@ def setup_command_handlers(application: Application):
     application.add_handler(CallbackQueryHandler(handle_button_callback))
 
 
-def start_telegram_client():
+async def start_telegram_client():
     global TG_CLIENT
 
     client_api_id = CONFIGS['service']['identity']['telegram']['client_api_id']
@@ -2858,7 +2859,7 @@ def start_telegram_client():
                                client_api_id,
                                client_api_hash)
 
-    TG_CLIENT.start()
+    await TG_CLIENT.start()
 
     logging.info('Telegram client started')
 
@@ -2920,7 +2921,7 @@ async def on_exit():
 async def main():
     try:
         reload_configs()
-        start_telegram_client()
+        await start_telegram_client()
         start_actions_queue()
         start_users_context_save()
         connect_google_service()
