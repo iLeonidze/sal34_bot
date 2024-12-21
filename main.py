@@ -972,7 +972,7 @@ def reload_tables():
                 logging.error('Syncing tables error PEOPLE: No data')
                 return
 
-            DB[building_number] = pd.DataFrame(rows, columns=DF_COLUMNS).applymap(
+            DB[building_number] = pd.DataFrame(rows, columns=DF_COLUMNS).map(
                 lambda x: x.strip() if isinstance(x, str) else x)
             DB[building_number]['user_type'] = DB[building_number]['user_type'].str.lower()
 
