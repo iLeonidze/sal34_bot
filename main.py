@@ -42,6 +42,7 @@ CACHES_STALE_TASK: None or Task = None
 ACTIONS_QUEUE_TASK: None or Task = None
 USERS_CONTEXT_SAVE_TASK: None or Task = None
 GOOGLE_CREDENTIALS = None
+TG_BOT_APPLICATION: Application
 TG_BOT: Bot
 TG_CLIENT: TelegramClient
 
@@ -1481,8 +1482,8 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
         reply_to_message_id = update.message.message_id
     elif update.message.reply_to_message.contact:
         requested_user_id = update.message.reply_to_message.contact.user_id
-    elif update.message.reply_to_message.forward_from:
-        requested_user_id = update.message.reply_to_message.forward_from.id
+    elif update.message.reply_to_message.forward_origin:
+        requested_user_id = update.message.reply_to_message.forward_origin.sender_user.id
     else:
         requested_user_id = update.message.reply_to_message.from_user.id
 
@@ -2984,8 +2985,8 @@ def start_telegram_client():
     logging.info('Telegram client started')
 
 
-def serve_telegram_requests():
-    global TG_BOT
+async def serve_telegram_requests():
+    global TG_BOT_APPLICATION, TG_BOT
 
     builder = ApplicationBuilder()
     builder.token(token=CONFIGS['service']['identity']['telegram']['bot_token'])
@@ -2996,14 +2997,27 @@ def serve_telegram_requests():
 
     application: Application = builder.build()
 
+    TG_BOT_APPLICATION = application
     TG_BOT = application.bot
 
     setup_command_handlers(application)
 
-    application.run_polling()
+    await application.initialize()
+    await application.start()
+
+    await application.updater.start_polling()
+
+    while True:
+        await asyncio.sleep(0.1)
 
 
-def on_exit():
+async def on_exit():
+
+    logging.info('Stopping telegram bot...')
+    await TG_BOT_APPLICATION.updater.stop()
+    await TG_BOT_APPLICATION.stop()
+    await TG_BOT_APPLICATION.shutdown()
+
     logging.info('Stopping tables sync...')
     stop_tables_synchronization()
 
@@ -3025,7 +3039,7 @@ def on_exit():
     os.kill(os.getpid(), 9)
 
 
-def main():
+async def main():
     try:
         reload_configs()
         start_telegram_client()
@@ -3035,10 +3049,12 @@ def main():
         start_tables_synchronization()
         start_caches_stale()
         logging.info('Bot started')
-        serve_telegram_requests()
+        await serve_telegram_requests()
+    except Exception as e:
+        traceback.print_exc()
     finally:
-        on_exit()
+        await on_exit()
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
