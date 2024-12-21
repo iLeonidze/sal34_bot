@@ -12,7 +12,6 @@ import traceback
 from typing import Dict, List, Any
 
 import emoji
-import requests
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -32,10 +31,7 @@ import logging
 from telethon.errors import UserPrivacyRestrictedError
 from telethon.sync import TelegramClient
 from telethon.tl.functions.channels import InviteToChannelRequest
-from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContactsRequest, \
-    AddContactRequest
 from telethon.tl.functions.messages import ExportChatInviteRequest
-from telethon.tl.types import InputPhoneContact
 
 from assistant import HelpAssistant, is_bot_assistant_request
 
@@ -114,17 +110,11 @@ GROUPS_IDS_EMOJI = {
     'cleaning_group': '🧹',
 }
 
-
 TABLES_RELOADED_TIME = 0
 LAST_STALED_USER_CACHE = time.time()
 QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
 
 HELP_ASSISTANT: HelpAssistant
-
-ED_LIMIT = 10
-ED_QUERY = 'https://ed.mos.ru/api/chat/users/contacts/person/?limit=%s&offset=%s&name=&sort=address&direction=ASC'
-ED_AUTHORIZATION = ''
-ED_MY_OBJECTS = []
 
 
 def get_default_context():
@@ -173,154 +163,23 @@ def is_repeated_symbol(s):
     return len(set(s.lower())) == 1
 
 
-def parse_address(query: str) -> (str or None, int or None):
-    address = None
-    index = None
-
-    r = requests.post("https://www.pochta.ru/suggestions/v2/suggestion.find-addresses",
-                      json={
-                          "query": query,
-                          "limit": 5,
-                          "language": "RUSSIAN",
-                          "mailDirection": "ALL",
-                          "fromBound": "REGION"
-                      },
-                      headers={
-                          'Accept': 'application/json',
-                          'Content-Type': 'application/json',
-                          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15',
-                          'Accept-Language': 'ru',
-                          'Referer': 'https://www.pochta.ru/offices'
-                      })
-
-    results = r.json()
-    if len(results) > 0:
-        el = results[0]
-        address = el['normalizedAddress']
-        index = el['postalCode']
-
-    return address, index
-
-
-def get_neighbours_page(offset=0):
-    uri = ED_QUERY % (ED_LIMIT, offset)
-    r = requests.get(uri,
-                     # verify=False,
-                     headers={
-                         'Cookie': 'Authorization=%s;' % ED_AUTHORIZATION
-                     })
-
-    results = r.json()
-
-    return results
-
-
-def load_ed_neighbours():
-    print('Loading neighbours initial page')
-
-    results = get_neighbours_page()
-
-    contacts_amount = results.get('data', {}).get('allContacts')
-    if not contacts_amount:
-        print('Failed')
-        return
-
-    neighbours = []
-    neighbours = neighbours + results['data']['contacts']
-
-    iterations = math.ceil(contacts_amount / ED_LIMIT)
-    if iterations == 1:
-        return neighbours
-
-    i = 1
-    while i < iterations:
-        print('Loading iteration %s' % i)
-        offset = i * ED_LIMIT
-        results = get_neighbours_page(offset)
-        contacts_amount = results.get('data', {}).get('allContacts')
-        if not contacts_amount:
-            print('Failed')
-            return
-        neighbours = neighbours + results['data']['contacts']
-        i += 1
-
-    return neighbours
-
-
-def is_ed_neighbour(ed_neighbours, obj_type, obj_number, obj_details):
-    object_any_neighbour_matched = False
-
-    for neighbour in ed_neighbours:
-        neighbour_matched = False
-        info = neighbour['contactInfo']
-
-        if obj_details['property_id'] in ED_MY_OBJECTS:
-            return 'ВЛАДЕЛЕЦ'
-
-        if obj_type == 'кв' and info['flat'] == str(obj_number):
-            neighbour_matched = True
-
-        elif obj_details['property_id'] in info['flat']:
-            neighbour_matched = True
-
-        elif obj_type == 'мм' and (
-                str(info['roomNumber']).lower() == 'мм' + str(obj_number) or
-                str(info['roomNumber']).lower() == str(obj_number) + 'м' or
-                str(info['roomNumber']).lower() == 'машино-место ' + str(obj_number)
-        ):
-            neighbour_matched = True
-
-        elif obj_type == 'кл' and (
-                str(info['roomNumber']).lower() == str(obj_number) + 'к' or
-                str(info['roomNumber']).lower() == 'кл' + str(obj_number) or
-                str(info['roomNumber']).lower() == 'помещение ' + str(obj_number) + 'к' or
-                str(info['roomNumber']).lower() == 'кл' + str(obj_number) + 'к'
-        ):
-            neighbour_matched = True
-
-        # if room number without ММ or КЛ, it is impossible to detect which one
-        # let's detect using logical method using owner name
-        if info['roomNumber'] == str(obj_number) and obj_type in ['мм', 'кл']:
-            owner_name_parts = info['nickName'].split(' ')
-            if len(owner_name_parts) == 2:
-                owner_name = owner_name_parts[0].lower().replace('ё', 'е')
-                owner_surname = owner_name_parts[1].lower().replace('ё', 'е')
-                for user in obj_details['persons']['owners']:
-                    if isinstance(user, User):
-                        person = user.person
-                    else:
-                        person = user
-
-                    if person["name"].lower().replace('ё', 'е') == owner_name and \
-                            person["surname"][0].lower().replace('ё', 'е') == owner_surname[0]:
-                        neighbour_matched = True
-                        break
-
-        if neighbour_matched:
-            neighbour['matched'] = True
-            object_any_neighbour_matched = True
-            # if ('OWNER' in info['relations'] or 'NONRESIDENTIAL_OWNER' in info['relations']) and info['confirmationLevel'] == 'FULL':
-            #     return 'ВЛАДЕЛЕЦ'
-            # else:
-            #     return 'НЕ ВЛАДЕЛЕЦ'
-
-    if object_any_neighbour_matched:
-        return 'ВЛАДЕЛЕЦ'
-
-    return 'НЕ ЗАРЕГИСТРИРОВАН'
-
-
 def is_bot_started_in_obj_details(obj_details):
     for owner in obj_details['persons']['owners']:
-        if isinstance(owner, User) and (owner.context['stats']['sended_private_messages_total'] > 0 or owner.context['private_chat']['bot_started']):
+        if isinstance(owner, User) and (
+                owner.context['stats']['sended_private_messages_total'] > 0 or owner.context['private_chat'][
+            'bot_started']):
             return 'ЗАПУЩЕН'
 
     for resident in obj_details['persons']['residents']:
-        if isinstance(resident, User) and (resident.context['stats']['sended_private_messages_total'] > 0 or resident.context['private_chat']['bot_started']):
+        if isinstance(resident, User) and (
+                resident.context['stats']['sended_private_messages_total'] > 0 or resident.context['private_chat'][
+            'bot_started']):
             return 'ЗАПУЩЕН, ТОЛЬКО У ПРОЖИВАЮЩЕГО'
 
     for rent in obj_details['persons']['rents']:
-        if isinstance(rent, User) and (rent.context['stats']['sended_private_messages_total'] > 0 or rent.context['private_chat']['bot_started']):
+        if isinstance(rent, User) and (
+                rent.context['stats']['sended_private_messages_total'] > 0 or rent.context['private_chat'][
+            'bot_started']):
             return 'ЗАПУЩЕН, ТОЛЬКО У АРЕНДАТОРА'
 
     return 'НЕ ЗАПУЩЕН'
@@ -449,7 +308,7 @@ class User:
                     ((table['name'] != row['name']) |
                      (table['surname'] != row['surname']) |
                      (table['patronymic'] != row['patronymic']))
-                ]
+                    ]
                 if not related_users_found_df.empty:
                     related_users_df = pd.concat([related_users_df, related_users_found_df])
                 # TODO: building correct objects from rows
@@ -481,7 +340,8 @@ class User:
         return not self.db_entries.empty
 
     def get_related_users(self):
-        return self.related_users_objects[['name', 'surname', 'patronymic', 'telegram', 'phone', 'added_to_group', 'show_phone']].drop_duplicates()
+        return self.related_users_objects[
+            ['name', 'surname', 'patronymic', 'telegram', 'phone', 'added_to_group', 'show_phone']].drop_duplicates()
 
     def get_user_filepath(self):
         return f'./users/{self.telegram_id}.json'
@@ -692,7 +552,8 @@ class User:
                 result.append(obj['number'])
         return result
 
-    def _get_neighbours(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> DataFrame:
+    def _get_neighbours(self, building=None, section: str = None, number: str or int = None,
+                        object_type: str = None) -> DataFrame:
         if not building:
             building = self.building
 
@@ -714,8 +575,10 @@ class User:
 
             # neighbours from same floor
             neighbours_from_floor = section_table[section_table['floor'] == str(obj['floor'])]
-            neighbours_bottom = section_table[(section_table['floor'] == str(obj['floor']-1)) & (section_table['floor_position'] == str(obj['floor_position']))]
-            neighbours_top = section_table[(section_table['floor'] == str(obj['floor']+1)) & (section_table['floor_position'] == str(obj['floor_position']))]
+            neighbours_bottom = section_table[(section_table['floor'] == str(obj['floor'] - 1)) & (
+                        section_table['floor_position'] == str(obj['floor_position']))]
+            neighbours_top = section_table[(section_table['floor'] == str(obj['floor'] + 1)) & (
+                        section_table['floor_position'] == str(obj['floor_position']))]
 
             obj_neighbours = pd.concat([neighbours_top, neighbours_from_floor, neighbours_bottom])
 
@@ -728,7 +591,8 @@ class User:
 
         return all_neighbours
 
-    def get_neighbours(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
+    def get_neighbours(self, building=None, section: str = None, number: str or int = None, object_type: str = None) -> \
+    Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
         neighbours_table = self._get_neighbours(building, section, number, object_type)
         return rebuild_neighbours_dict_from_table(neighbours_table)
 
@@ -769,7 +633,8 @@ async def is_user_added_to_groups(telegram_id: int, groups_ids: List[int]) -> bo
     return True
 
 
-def rebuild_neighbours_dict_from_table(origin_table: DataFrame) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
+def rebuild_neighbours_dict_from_table(origin_table: DataFrame) -> Dict[
+    str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
     table = origin_table.copy()
     table.number = table.number.astype(int)
     table = table.sort_values(by=['number'], ascending=True)
@@ -943,7 +808,7 @@ class UsersCache:
         for user_tg_id in list(self.users.keys()):
             cached_user = self.users[user_tg_id]
 
-            if current_time-cached_user.load_time > stale_interval:
+            if current_time - cached_user.load_time > stale_interval:
 
                 logging.debug(f'Staling cache for user {user_tg_id}')
 
@@ -973,46 +838,13 @@ class UsersCache:
 
         return neighbours_table
 
-    def get_neighbours_from_section(self, building: str, section: str = None) -> Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
+    def get_neighbours_from_section(self, building: str, section: str = None) -> Dict[
+        str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]]:
         neighbours_table = self._get_neighbours_from_section(building, section)
         return rebuild_neighbours_dict_from_table(neighbours_table)
 
 
 USERS_CACHE = UsersCache()
-
-
-async def _tg_client_add_user_to_contacts(client: TelegramClient,
-                                          user: User = None,
-                                          phone: str or int = None,
-                                          name: str = None,
-                                          surname: str = None):
-    if user is None and phone is None:
-        raise Exception('Phone or User ID should be specified')
-
-    logging.info('Adding contact...')
-
-    if isinstance(phone, int):
-        phone = "+" + str(phone)
-
-    if not name:
-        name = phone
-
-    if not surname:
-        surname = phone
-
-    if user is None:
-        try:
-            logging.info('Adding via Phone...')
-            contact = InputPhoneContact(client_id=0, phone=phone, first_name=name, last_name=surname)
-            return await client(ImportContactsRequest([contact]))
-        except Exception as e:
-            if user is None:
-                raise e from None
-
-    logging.debug('Observing user via ID...')
-    await _tg_client_observe_groups_for_user(client, user)
-    logging.debug('Adding via ID...')
-    return await client(AddContactRequest(user.telegram_id, name, surname, phone=phone))
 
 
 async def _tg_client_observe_groups_for_user(client: TelegramClient, user: User):
@@ -1021,51 +853,7 @@ async def _tg_client_observe_groups_for_user(client: TelegramClient, user: User)
         await client.get_participants(chat['id'])
 
 
-async def _tg_client_remove_user_from_contacts(client: TelegramClient, tg_id):
-    return await client(DeleteContactsRequest(id=tg_id))
-
-
-async def _tg_client_get_guest_id_via_phone(phone: str) -> int or None:
-    return None
-
-    # loop = asyncio.new_event_loop()
-    #
-    # client_api_id = CONFIGS['service']['identity']['telegram']['client_api_id']
-    # client_api_hash = CONFIGS['service']['identity']['telegram']['client_api_hash']
-    #
-    # client: TelegramClient = TelegramClient('sal34_bot_client',
-    #                                         client_api_id,
-    #                                         client_api_hash,
-    #                                         loop=loop)
-    #
-    # async with client:
-    #     import_result = await _tg_client_add_user_to_contacts(client, phone=phone)
-    #
-    #     if len(import_result.imported) == 0:
-    #         logging.warn('Nothing imported!')
-    #         return None
-    #
-    #     logging.debug('Loading user info...')
-    #     user_id = await _tg_client_get_entity_id(phone)
-    #
-    #     if not USERS_CACHE.get_user(user_id).has_any_object():
-    #         logging.info('Removing contact...')
-    #         await _tg_client_remove_user_from_contacts(client, import_result.users[0])
-    #
-    #     return user_id
-
-
 async def _tg_client_add_user_to_channel(channel_id: int, user: User) -> None:
-        # try:
-        #     await _tg_client_add_user_to_contacts(client,
-        #                                           phone=user.phone['number'],
-        #                                           user=user,
-        #                                           name=user.person['name'] + ' 34',
-        #                                           surname=user.person.get('surname', ''))
-        # except Exception as e:
-        #     logging.error('Failed to add user to contacts')
-        #     logging.error(e)
-
     await TG_CLIENT(InviteToChannelRequest(
         channel_id,
         [user.telegram_id]
@@ -1099,9 +887,9 @@ async def tg_client_get_invite_for_chat(chat_id: int) -> str:
 
 async def _tg_client_get_invite_for_chat(chat_id: int) -> str:
     result = await TG_CLIENT(ExportChatInviteRequest(
-            peer=chat_id,
-            expire_date=datetime.datetime.utcnow() + datetime.timedelta(days=1),
-            usage_limit=1
+        peer=chat_id,
+        expire_date=datetime.datetime.utcnow() + datetime.timedelta(days=1),
+        usage_limit=1
     ))
 
     return result.link
@@ -1133,7 +921,7 @@ async def tg_client_get_user_id_by_phone(phone: str) -> int or None:
     if result is not None:
         return result
 
-    return await _tg_client_get_guest_id_via_phone(phone)
+    return None
 
 
 def get_chat_for_section_building(building, section):
@@ -1182,7 +970,7 @@ def connect_google_service():
 def reload_tables():
     global TABLES_RELOADED_TIME
 
-    if time.time()-TABLES_RELOADED_TIME < 10:
+    if time.time() - TABLES_RELOADED_TIME < 10:
         return
 
     logging.debug('Reloading tables...')
@@ -1205,7 +993,8 @@ def reload_tables():
                 logging.error('Syncing tables error PEOPLE: No data')
                 return
 
-            DB[building_number] = pd.DataFrame(rows, columns=DF_COLUMNS).applymap(lambda x: x.strip() if isinstance(x, str) else x)
+            DB[building_number] = pd.DataFrame(rows, columns=DF_COLUMNS).applymap(
+                lambda x: x.strip() if isinstance(x, str) else x)
             DB[building_number]['user_type'] = DB[building_number]['user_type'].str.lower()
 
             # ASSISTANT
@@ -1345,7 +1134,7 @@ async def proceed_actions_queue():
                     if action['type'] == 'delete':
                         logging.debug(f"Deleting message {action['message_id']} from {action['chat_id']}...")
                         await TG_BOT.delete_message(chat_id=action['chat_id'],
-                                              message_id=action['message_id'])
+                                                    message_id=action['message_id'])
 
                     action['executed'] = True
 
@@ -1360,7 +1149,7 @@ async def proceed_actions_queue():
 
 def proceed_users_context_save():
     interval = CONFIGS['service']['scheduler']['context_save_interval']
-    if time.time()-USERS_CACHE.last_save_time > interval:
+    if time.time() - USERS_CACHE.last_save_time > interval:
         logging.debug('Context save started...')
         USERS_CACHE.save_users()
         logging.debug('Context save finished...')
@@ -1369,23 +1158,21 @@ def proceed_users_context_save():
 async def bot_send_message_user_not_authorized(update: Update, context: CallbackContext):
     text = f'{update.effective_user.name}, Вы должны быть зарегистрированы чтобы воспользоваться мною. Напишите администраторам @iLeonidze или @Foeniculum'
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=text,
-                             reply_to_message_id=update.message.message_id)
+                                   text=text,
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_send_message_this_command_bot_allowed_here(update: Update, context: CallbackContext):
     text = f'Эта команда недопустима здесь'
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=text,
-                             reply_to_message_id=update.message.message_id)
+                                   text=text,
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def start_identification(update: Update, context: CallbackContext):
-    text = f'Привет\\!\nЯ бот из дома 2к6 \\(бывший 34\\)\\. Чтобы воспользоваться мной и попасть в закрытый чат, необходимо ' \
-           f'пройти идентификацию по [этой инструкции](https://sal34.notion.site/sal34/28-2-6-FAQ-39a269ac25924dacbb3dc589b1579d5b#5b071d6efb30417ebf5cf311645f41b1)\\. ' \
-           f'\n\nПомимо этого, у дома есть [открытый чат](https://t.me/salarevo34)\\.'
+    text = f'Привет\\!\nЧтобы воспользоваться мной и попасть в закрытый чат, необходимо пройти идентификацию.'
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=text, parse_mode='MarkdownV2')
+                                   text=text, parse_mode='MarkdownV2')
     return
 
 
@@ -1435,19 +1222,16 @@ async def bot_command_start(update: Update, context: CallbackContext):
     if not this_user.is_identified():
         return await start_identification(update, context)
 
-    text = 'Привет!\nКажется, Вы уже прошли идентификацию и для Вас уже всё доступно.\n' \
-           'Выберите из меню что Вы хотите узнать.'
+    text = 'Привет! Выберите из меню что Вы хотите узнать.'
 
     reply_markup = set_keyboard_context('main')
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=text, reply_markup=reply_markup)
+                                   text=text, reply_markup=reply_markup)
 
 
 def proceed_private_dialog(update: Update, context: CallbackContext):
     pass
-    # context.bot.send_message(chat_id=update.effective_chat.id,
-    #                          text='?')
 
 
 def form_objects_list_string(user: User) -> str:
@@ -1502,7 +1286,7 @@ def form_related_users_list_sting(user: User):
     if user.related_users_objects is None or user.related_users_objects.empty:
         return ''
 
-    text = 'Coжители:'
+    text = 'Связанные:'
     for index, row in user.get_related_users().iterrows():
 
         fullname = f'{row["surname"]} {row["name"]}'
@@ -1519,11 +1303,6 @@ def form_related_users_list_sting(user: User):
         else:
             text += ', телефон не указан'
 
-        # if row['added_to_group'] == 'YES':
-        #     text += ' \\(в группе\\)'
-        # else:
-        #     text += ' \\(не в группе\\)'
-
     return text.strip()
 
 
@@ -1537,9 +1316,9 @@ def get_short_object_type_str_by_id(object_type_id: str):
 
 
 def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, List[Any[User, List[str]]]]]]],
-                           private: bool = False,
-                           show_objects: bool = False,
-                           split_floors: bool = False) -> str:
+                            private: bool = False,
+                            show_objects: bool = False,
+                            split_floors: bool = False) -> str:
     text = ''
     lines = 0
 
@@ -1563,7 +1342,8 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
                         if not private:
                             user_str = user.get_linked_shortname()
                         else:
-                            user_str = user.get_linked_seminame() + ' тел\\. ' + encode_markdown(user.get_public_phone())
+                            user_str = user.get_linked_seminame() + ' тел\\. ' + encode_markdown(
+                                user.get_public_phone())
                 else:
                     user_str = 'нет '
                     if not private:
@@ -1624,9 +1404,9 @@ async def bot_command_neighbours(update: Update, context: CallbackContext):
             neighbours = USERS_CACHE.get_neighbours_from_section(chat_building)
 
         text = get_neighbours_list_str(neighbours,
-                                      private=True,
-                                      show_objects=True,
-                                      split_floors=True)
+                                       private=True,
+                                       show_objects=True,
+                                       split_floors=True)
     elif not chat_section:
         is_private = update.effective_chat.type == 'private'
         if update.message.reply_to_message:
@@ -1661,17 +1441,17 @@ async def bot_command_neighbours(update: Update, context: CallbackContext):
         else:
             neighbours = USERS_CACHE.get_neighbours_from_section(chat_building, chat_section)
             text = get_neighbours_list_str(neighbours,
-                                          private=False,
-                                          show_objects=True,
-                                          split_floors=True)
+                                           private=False,
+                                           show_objects=True,
+                                           split_floors=True)
 
     for text_part in text.split('XXX_SPLITTER_XXX'):
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=text_part,
-                                 reply_to_message_id=update.message.message_id,
-                                 disable_notification=True,
-                                 parse_mode='MarkdownV2',
-                                 protect_content=True)
+                                       text=text_part,
+                                       reply_to_message_id=update.message.message_id,
+                                       disable_notification=True,
+                                       parse_mode='MarkdownV2',
+                                       protect_content=True)
 
 
 async def bot_command_who_is_this(update: Update, context: CallbackContext):
@@ -1725,9 +1505,9 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
                 text = f'{text}\nТелефон: `{str(update.message.reply_to_message.contact.phone_number).replace("+", "")}`'
 
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=text,
-                                 reply_to_message_id=update.message.reply_to_message.message_id,
-                                 parse_mode='MarkdownV2')
+                                       text=text,
+                                       reply_to_message_id=update.message.reply_to_message.message_id,
+                                       parse_mode='MarkdownV2')
         return
 
     if update.effective_chat.type == 'private':
@@ -1776,7 +1556,8 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
 
         text += '\nАдрес для уведомлений: '
         if requested_user.notification:
-            text += '\n' + '`' + requested_user.notification['address'] + ' (' + requested_user.notification['index'] + ')`'
+            text += '\n' + '`' + requested_user.notification['address'] + ' (' + requested_user.notification[
+                'index'] + ')`'
         else:
             text += 'Нет'
 
@@ -1804,7 +1585,8 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
             ],
             [
                 InlineKeyboardButton("Отозвать доступ к боту", callback_data=f'lock_bot_access|{requested_user_id}'),
-                InlineKeyboardButton("Деактивировать пользователя", callback_data=f'deactivate_user|{requested_user_id}')
+                InlineKeyboardButton("Деактивировать пользователя",
+                                     callback_data=f'deactivate_user|{requested_user_id}')
             ]
         ])
 
@@ -1866,10 +1648,10 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
                         text += f' на {floor_number}\\-м этаже'
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=str(text),
-                             reply_to_message_id=reply_to_message_id,
-                             parse_mode='MarkdownV2',
-                             reply_markup=reply_markup)
+                                   text=str(text),
+                                   reply_to_message_id=reply_to_message_id,
+                                   parse_mode='MarkdownV2',
+                                   reply_markup=reply_markup)
 
 
 async def bot_command_stats(update: Update, context: CallbackContext):
@@ -1903,7 +1685,8 @@ async def bot_command_stats(update: Update, context: CallbackContext):
         text += '\n\nКоличество добавленных квартир по секциям:'
         for number, value in objects[objects['object_type'] == 'кв'].groupby(by="entrance").size().items():
             tb_flats = table[table['object_type'] == 'кв']
-            section_max = len(tb_flats[tb_flats['entrance'] == number][['object_type', 'number', 'entrance']].drop_duplicates().index)
+            section_max = len(
+                tb_flats[tb_flats['entrance'] == number][['object_type', 'number', 'entrance']].drop_duplicates().index)
             section_percent = math.floor(value / section_max * 100)
             text += f'\n{number} секция: {value} / {str(section_max)} ({str(section_percent)}%)'
 
@@ -1912,7 +1695,7 @@ async def bot_command_stats(update: Update, context: CallbackContext):
 
             text += f'Таблицы:' \
                     f'\n- Таблиц в памяти: {len(DB)}' \
-                    f'\n- Последняя синхронизация: {int(time.time()-TABLES_RELOADED_TIME)} сек. назад'
+                    f'\n- Последняя синхронизация: {int(time.time() - TABLES_RELOADED_TIME)} сек. назад'
 
             cache_stats = USERS_CACHE.get_stats()
             text += f'\n\nКэш:' \
@@ -1926,7 +1709,9 @@ async def bot_command_stats(update: Update, context: CallbackContext):
                     f'\n- Последнее исполнение очереди: {int(time.time() - QUEUED_ACTIONS_LAST_EXECUTED_TIME)} сек. назад'
 
     else:
-        neighbours_table = table[(table['entrance'] == chat_section) & (table['added_to_group'] == 'YES') & (table['object_type'] == 'кв')][['number', 'floor']].drop_duplicates()
+        neighbours_table = table[
+            (table['entrance'] == chat_section) & (table['added_to_group'] == 'YES') & (table['object_type'] == 'кв')][
+            ['number', 'floor']].drop_duplicates()
         text += f'Всего квартир {chat_section}-й секции в этом чате: {len(neighbours_table.index)}'
 
         text += f'\n\nКвартир в чате по каждому этажу:'
@@ -1937,8 +1722,8 @@ async def bot_command_stats(update: Update, context: CallbackContext):
                 text += f'\n{floor_number} этаж: {value}'
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=text,
-                             reply_to_message_id=update.message.message_id)
+                                   text=text,
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def raw_try_send_user_link(update: Update, context: CallbackContext) -> User or int or None:
@@ -1987,25 +1772,33 @@ async def bot_command_help(update: Update, context: CallbackContext):
 
     commands = [
         ['help', 'Выводит это сообщение о том как пользоваться ботом'],
-        ['neighbours', 'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете (в общем чате это не работает)'],
-        ['who', 'Узнать информацию о соседе или о себе\nНеобходимо вызывать эту команду ответив на чье-то сообщение, информацию о котором Вы хотите узнать. Вызов в общем чате покажет из какой секции, вызов в секции покажет с какого этажа и номер объекта недвижимости. Если вызвать команду без реплая, то будет выведена информация о Вас.'],
-        ['stats', 'Общая статистика по дому или секции\nВ общем чате показывает сколько соседей добавлено в базу, в чате секции показывает количество жильцов на каждом этаже'],
+        ['neighbours',
+         'Список соседей\nВызов в общем чате покажет Ваших ближайших соседей, вызов в секции покажет имена и ссылки всех соседей секции поэтажно. Если в чате секции ответить этой командой на сообщение, то Вы сможете увидеть ближайших соседей человека, информацию о котором Вы ищете (в общем чате это не работает)'],
+        ['who',
+         'Узнать информацию о соседе или о себе\nНеобходимо вызывать эту команду ответив на чье-то сообщение, информацию о котором Вы хотите узнать. Вызов в общем чате покажет из какой секции, вызов в секции покажет с какого этажа и номер объекта недвижимости. Если вызвать команду без реплая, то будет выведена информация о Вас.'],
+        ['stats',
+         'Общая статистика по дому или секции\nВ общем чате показывает сколько соседей добавлено в базу, в чате секции показывает количество жильцов на каждом этаже'],
     ]
 
     admin_commands = [
-        ['who', 'Выводит всю информацию о человеке по одному из заданных параметров:\n- Сообщение\n- Форвард сообщения\n- Контакт\n- Username\n- Номер телефона\n- Номер телефона вне нашей базы\n- ID телеграма'],
-        ['reload', 'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы (это действие высвободит память, но может привести к снижению производительности бота)'],
+        ['who',
+         'Выводит всю информацию о человеке по одному из заданных параметров:\n- Сообщение\n- Форвард сообщения\n- Контакт\n- Username\n- Номер телефона\n- Номер телефона вне нашей базы\n- ID телеграма'],
+        ['reload',
+         'Сохраняет контекстные данные, сбрасывает все кэши и заново синхронизирует таблицы (это действие высвободит память, но может привести к снижению производительности бота)'],
         # ['reload_db', 'Вызывает принудительную синхронизацию всех таблиц БД'],
         ['start_tables_sync', 'Начинает синхронизацию таблиц БД'],
         ['stop_tables_sync', 'Останавливает синхронизацию таблиц БД'],
-        ['flush_users_context', 'Вызывает принудительное сохранение контекстных данных пользователей, ожидающих сохранения'],
-        ['flush_all_users_context', 'Вызывает принудительное сохранение контекстных данных ВСЕХ пользователей, находящихся в кэше'],
+        ['flush_users_context',
+         'Вызывает принудительное сохранение контекстных данных пользователей, ожидающих сохранения'],
+        ['flush_all_users_context',
+         'Вызывает принудительное сохранение контекстных данных ВСЕХ пользователей, находящихся в кэше'],
         ['start_users_context_autosave', 'Запускает автосохранение контекстных данных пользователей'],
         ['stop_users_context_autosave', 'Останавливает автосохранение контекстных данных пользователей'],
         ['start_cached_users_stale', 'Запускает устаревание и автоматическое извлечение старых пользователей из кэша'],
         ['stop_cached_users_stale', 'Прекращает устаревание и автоматическое извлечение старых пользователей из кэша'],
         ['recalculate_stats', 'Вызывает перерасчет всей статистики'],
-        ['reset_actions_queue', 'Сбросить очередь запланированных действий (в т.ч. сбрасывает очередь удаления мусора)'],
+        ['reset_actions_queue',
+         'Сбросить очередь запланированных действий (в т.ч. сбрасывает очередь удаления мусора)'],
         ['start_actions_queue', 'Запустить исполнение накопленной очереди действий'],
         ['stop_actions_queue', 'Остановить исполнение накопленной очереди действий'],
         ['add_all_users_to_chats', 'Принудительно добавляет всех пользователей в соответствующие им чаты'],
@@ -2018,25 +1811,17 @@ async def bot_command_help(update: Update, context: CallbackContext):
         ['parse_address', 'Распарсить почтовый адрес'],
     ]
 
-    message = encode_markdown('В чатах дома есть бот-ассистент, который помогает соседям. Также '
-                              'боту можно написать в личные сообщения, нажав на его аватарку '
-                              'слева. Боту можно задать интересующий вас вопрос: напишите обычное '
-                              'сообщение со своим вопросом, а в начале сообщение не забудьте '
-                              'позвать бота написав "Бот,"\n\nВот на что бот умеет отвечать:')
+    message = encode_markdown(
+        'В чатах дома есть бот-ассистент, который помогает соседям. Боту можно написать в личные сообщения. В чате также можно задать интересующий вас вопрос: напишите обычное сообщение со своим вопросом, а в начале сообщение не забудьте позвать бота написав "Бот, ххх?"\n\nВот на что бот умеет отвечать:')
 
     global HELP_ASSISTANT
     for entry in HELP_ASSISTANT.db:
         message += f'\n\n*{encode_markdown(entry["name"])}*\n`Бот, {encode_markdown(entry["test_queries"][0].lower())}`'
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=message,
-                             reply_to_message_id=update.message.message_id,
-                             parse_mode='MarkdownV2')
-
-
-
-    # for command in commands:
-    #     message += f'\n\n/{command[0]}\n{command[1]}'
+                                   text=message,
+                                   reply_to_message_id=update.message.message_id,
+                                   parse_mode='MarkdownV2')
 
     if is_admin_chat:
         message = '*Админские команды*'
@@ -2044,9 +1829,9 @@ async def bot_command_help(update: Update, context: CallbackContext):
             message += f'\n\n/{encode_markdown(admin_command[0])}\n{encode_markdown(admin_command[1])}'
 
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=message,
-                                 reply_to_message_id=update.message.message_id,
-                                 parse_mode='MarkdownV2')
+                                       text=message,
+                                       reply_to_message_id=update.message.message_id,
+                                       parse_mode='MarkdownV2')
 
 
 async def bot_command_reload_db(update: Update, context: CallbackContext):
@@ -2067,8 +1852,8 @@ async def bot_command_reload_db(update: Update, context: CallbackContext):
     reload_tables()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Таблицы синхронизированы',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Таблицы синхронизированы',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_reload(update: Update, context: CallbackContext):
@@ -2090,8 +1875,8 @@ async def bot_command_reload(update: Update, context: CallbackContext):
     reload_tables()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Кэши очищены и таблицы синхронизированы',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Кэши очищены и таблицы синхронизированы',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_start_tables_sync(update: Update, context: CallbackContext):
@@ -2112,8 +1897,8 @@ async def bot_command_start_tables_sync(update: Update, context: CallbackContext
     start_tables_sync()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Синхронизация таблиц запущена',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Синхронизация таблиц запущена',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_stop_tables_sync(update: Update, context: CallbackContext):
@@ -2134,8 +1919,8 @@ async def bot_command_stop_tables_sync(update: Update, context: CallbackContext)
     stop_tables_sync()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Синхронизация таблиц остановлена',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Синхронизация таблиц остановлена',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_flush_users_context(update: Update, context: CallbackContext):
@@ -2156,8 +1941,8 @@ async def bot_command_flush_users_context(update: Update, context: CallbackConte
     USERS_CACHE.save_users()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Зафлашены все закэшированные пользователи, которые ожидали флаша',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Зафлашены все закэшированные пользователи, которые ожидали флаша',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_flush_all_users_context(update: Update, context: CallbackContext):
@@ -2178,8 +1963,8 @@ async def bot_command_flush_all_users_context(update: Update, context: CallbackC
     USERS_CACHE.save_all_users()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Принудительно зафлашены все закэшированные пользователи',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Принудительно зафлашены все закэшированные пользователи',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_start_users_context_autosave(update: Update, context: CallbackContext):
@@ -2200,8 +1985,8 @@ async def bot_command_start_users_context_autosave(update: Update, context: Call
     start_users_context_save()
 
     await  context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Автоматическое отложенное сохранение запущено',
-                             reply_to_message_id=update.message.message_id)
+                                    text='Автоматическое отложенное сохранение запущено',
+                                    reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_stop_users_context_autosave(update: Update, context: CallbackContext):
@@ -2222,8 +2007,8 @@ async def bot_command_stop_users_context_autosave(update: Update, context: Callb
     stop_users_context_save()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Автоматическое отложенное сохранение остновлено, все сохранения будут происходить синхронно',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Автоматическое отложенное сохранение остновлено, все сохранения будут происходить синхронно',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_start_cached_users_stale(update: Update, context: CallbackContext):
@@ -2244,8 +2029,8 @@ async def bot_command_start_cached_users_stale(update: Update, context: Callback
     start_caches_stale()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Устаревание кэшей запущено',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Устаревание кэшей запущено',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_stop_cached_users_stale(update: Update, context: CallbackContext):
@@ -2266,15 +2051,15 @@ async def bot_command_stop_cached_users_stale(update: Update, context: CallbackC
     stop_caches_stale()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Устаревание кэшей остановлено',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Устаревание кэшей остановлено',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_recalculate_stats(update: Update, context: CallbackContext):
     # TODO
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Сейчас это недоступно',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Сейчас это недоступно',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_reset_actions_queue(update: Update, context: CallbackContext):
@@ -2295,8 +2080,8 @@ async def bot_command_reset_actions_queue(update: Update, context: CallbackConte
     reset_actions_queue()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Запланированная очередь действий сброшена',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Запланированная очередь действий сброшена',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_start_actions_queue(update: Update, context: CallbackContext):
@@ -2317,8 +2102,8 @@ async def bot_command_start_actions_queue(update: Update, context: CallbackConte
     start_actions_queue()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Запущено исполнение запланированной очереди действий',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Запущено исполнение запланированной очереди действий',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_stop_actions_queue(update: Update, context: CallbackContext):
@@ -2339,8 +2124,8 @@ async def bot_command_stop_actions_queue(update: Update, context: CallbackContex
     stop_actions_queue()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Исполнение запланированной очереди действий остановлено',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Исполнение запланированной очереди действий остановлено',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_revalidate_users_groups(update: Update, context: CallbackContext):
@@ -2359,8 +2144,8 @@ async def bot_command_revalidate_users_groups(update: Update, context: CallbackC
     logging.debug('Admin requested to revalidate all users in groups!')
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Ревалидирую всех соседей в группах...',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Ревалидирую всех соседей в группах...',
+                                   reply_to_message_id=update.message.message_id)
 
     added_everywhere_counter = 0
     not_added_everywhere_counter = 0
@@ -2376,63 +2161,17 @@ async def bot_command_revalidate_users_groups(update: Update, context: CallbackC
 
         if not added_everywhere:
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     parse_mode='MarkdownV2',
-                                     text=text)
+                                           parse_mode='MarkdownV2',
+                                           text=text)
             not_added_everywhere_counter += 1
         else:
             added_everywhere_counter += 1
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Готово!\n\n'
-                                  f'Находятся во всех группах: {added_everywhere_counter}\n'
-                                  f'Отсутствуют в каких то группах: {not_added_everywhere_counter}',
-                             reply_to_message_id=update.message.message_id)
-
-
-async def bot_command_add_all_users_to_chats(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
-    logging.debug('Admin requested add users to all chats!')
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Начинаю добавление в чаты всех пользователей...',
-                             reply_to_message_id=update.message.message_id)
-
-    users = get_all_users(chat_building)
-    for i, user in enumerate(users):
-        if await user.is_added_to_all_groups():
-            continue
-
-        # TODO: remove this if statement and sub-block?
-        if not user.add_to_group:
-            # context.bot.send_message(chat_id=update.effective_chat.id,
-            #                          text=f'{i+1}/{len(users)} ПРОПУЩЕН "{user.get_fullname()}"')
-            continue
-
-        try:
-            user.add_to_all_chats()
-            await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'{i+1}/{len(users)} добавлен "{user.get_fullname()}"')
-            time.sleep(60)
-        except Exception as e:
-            logging.error('An exception occurred while adding user')
-            logging.error(e)
-            await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'{i+1}/{len(users)} НЕ УДАЛОСЬ ДОБАВИТЬ "{user.get_fullname()}"\n\n{str(e)}')
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Все пользователи добавлены!',
-                             reply_to_message_id=update.message.message_id)
+                                   text=f'Готово!\n\n'
+                                        f'Находятся во всех группах: {added_everywhere_counter}\n'
+                                        f'Отсутствуют в каких то группах: {not_added_everywhere_counter}',
+                                   reply_to_message_id=update.message.message_id)
 
 
 async def bot_command_add_all_users_to_chat(update: Update, context: CallbackContext):
@@ -2462,320 +2201,8 @@ async def bot_command_add_all_users_to_chat(update: Update, context: CallbackCon
 
     reply_markup = InlineKeyboardMarkup(buttons)
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Выберите куда необходимо добавить всех пользователей',
-                             reply_markup=reply_markup)
-
-
-async def bot_command_get_potential_neighbours_issues(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Проверяю базу на предмет пропущенных записей соседей...',
-                             reply_to_message_id=update.message.message_id)
-
-    table = DB[chat_building]
-    uniq_names = table[table['telegram'] != ''][['name', 'surname', 'patronymic']].drop_duplicates()
-    for index, uname in uniq_names.iterrows():
-        found_non_tg_recs = False
-        found_recs_for_uniq = table[(table['name'] == uname['name']) &
-              (table['surname'] == uname['surname']) &
-              (table['patronymic'] == uname['patronymic'])][['name', 'surname', 'patronymic', 'telegram']]
-        uutg = None
-        for index2, uuname in found_recs_for_uniq.iterrows():
-            if not uuname['telegram']:
-                found_non_tg_recs = True
-            else:
-                uutg = uuname['telegram']
-        if found_non_tg_recs:
-            fullname = ' '.join([uname['surname'], uname['name'], uname['patronymic']])
-            await  context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'Несоответствие\n{fullname}\nTG ID: {uutg}')
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Завершено',
-                             reply_to_message_id=update.message.message_id)
-
-
-async def bot_command_parse_address(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
-    if not update.message.reply_to_message:
-        await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=f'Эту команду можно использовать только реплаем на искомый адрес',
-                                 reply_to_message_id=update.message.reply_to_message.message_id)
-        return
-
-    query = update.message.reply_to_message.text
-
-    try:
-        address, index = parse_address(query)
-        if address is None:
-            await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'Адрес не найден',
-                                     reply_to_message_id=update.message.reply_to_message.message_id)
-        else:
-            await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'`{address}`\n\n`{index}`',
-                                     parse_mode='MarkdownV2',
-                                     reply_to_message_id=update.message.reply_to_message.message_id)
-
-    except Exception as e:
-        traceback.print_exc()
-        await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=f'Ошибка при определении адреса',
-                                 reply_to_message_id=update.message.reply_to_message.message_id)
-
-
-async def bot_command_get_unknown_neighbours_file(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Собираю базу...',
-                             reply_to_message_id=update.message.message_id)
-
-    persons_per_objs = get_persons_per_objects(chat_building)
-
-    columns = ['type', 'entrance', 'floor', 'number']
-    fully_unknown = pd.DataFrame(columns=columns)
-    partially_unknown = pd.DataFrame(columns=columns)
-    bad_data = pd.DataFrame(columns=columns)
-    unknown_telegram = pd.DataFrame(columns=columns)
-
-    for obj_type, objs in persons_per_objs.items():
-        for obj_number, obj_details in objs.items():
-
-            has_owners = False
-            has_anybody = False
-            has_bad_data = False
-            has_unknown_telegram = False
-
-            if obj_details['persons']['owners']:
-                for person in obj_details['persons']['owners']:
-                    if isinstance(person, User):
-                        has_owners = True
-                        has_anybody = True
-
-                        if not person.phone or \
-                                not person.telegram_id or \
-                                not person.person['name'] or \
-                                person.person['name'] == '' or \
-                                not person.person['surname'] or \
-                                person.person['surname'] == '' or \
-                                not person.person['patronymic'] or \
-                                person.person['patronymic'] == '':
-                            has_bad_data = True
-                    else:
-                        if person['phone']:
-                            # case when phone is set, but no tg id
-                            has_unknown_telegram = True
-
-            if not has_anybody and (obj_details['persons']['rents'] or obj_details['persons']['residents']):
-                has_anybody = True
-
-            row = {
-                'type': obj_type,
-                'entrance': int(obj_details['entrance']),
-                'floor': int(obj_details['floor']),
-                'number': int(obj_number)
-            }
-
-            if has_unknown_telegram:
-                unknown_telegram = unknown_telegram.append(row, ignore_index=True)
-            elif has_bad_data:
-                bad_data = bad_data.append(row, ignore_index=True)
-            else:
-                if not has_owners and not has_anybody:
-                    fully_unknown = fully_unknown.append(row, ignore_index=True)
-
-                if not has_owners and has_anybody:
-                    partially_unknown = partially_unknown.append(row, ignore_index=True)
-
-    fully_unknown.to_excel("fully_unknown.xlsx")
-    partially_unknown.to_excel("partially_unknown.xlsx")
-    bad_data.to_excel("bad_data.xlsx")
-    unknown_telegram.to_excel("unknown_telegram.xlsx")
-
-    await context.bot.sendDocument(chat_id=update.effective_chat.id,
-                             document=open('fully_unknown.xlsx', 'rb'),
-                             reply_to_message_id=update.message.message_id)
-    await context.bot.sendDocument(chat_id=update.effective_chat.id,
-                             document=open('partially_unknown.xlsx', 'rb'),
-                             reply_to_message_id=update.message.message_id)
-    await context.bot.sendDocument(chat_id=update.effective_chat.id,
-                             document=open('bad_data.xlsx', 'rb'),
-                             reply_to_message_id=update.message.message_id)
-    await context.bot.sendDocument(chat_id=update.effective_chat.id,
-                             document=open('unknown_telegram.xlsx', 'rb'),
-                             reply_to_message_id=update.message.message_id)
-
-    os.unlink("fully_unknown.xlsx")
-    os.unlink("partially_unknown.xlsx")
-    os.unlink("bad_data.xlsx")
-    os.unlink("unknown_telegram.xlsx")
-
-
-async def bot_command_get_non_ready_neighbours(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                                   text='Собираю базу...',
-                                   reply_to_message_id=update.message.message_id)
-
-    persons_per_objs = get_persons_per_objects(chat_building)
-
-    columns = ['Кадастровый номер', 'Тип', 'Подъезд', 'Этаж', 'Номер', 'Площадь', 'Статус в ЭД', 'Статус бота']
-    neighbours_status = []
-
-    ed_neighbours = load_ed_neighbours()
-
-    print('Data loaded, calculating table...')
-
-    for obj_type, objs in persons_per_objs.items():
-        for obj_number, obj_details in objs.items():
-            registered = is_ed_neighbour(ed_neighbours, obj_type, obj_number, obj_details)
-            bot_started = is_bot_started_in_obj_details(obj_details)
-
-            row = {
-                'Кадастровый номер': obj_details['property_id'],
-                'Тип': obj_type,
-                'Подъезд': int(obj_details['entrance']),
-                'Этаж': int(obj_details['floor']),
-                'Номер': int(obj_number),
-                'Площадь': float(obj_details['area'].replace(',', '.')),
-                'Статус в ЭД': registered,
-                'Статус бота': bot_started
-            }
-            neighbours_status.append(pd.Series(row))
-
-    await send_non_matched_neighbours(context, update, ed_neighbours)
-
-    pd.DataFrame(neighbours_status, columns=columns).to_excel("neighbours_status.xlsx", index=False)
-
-    await context.bot.sendDocument(chat_id=update.effective_chat.id,
-                                   document=open('neighbours_status.xlsx', 'rb'),
-                                   reply_to_message_id=update.message.message_id)
-
-    os.unlink("neighbours_status.xlsx")
-
-
-async def send_non_matched_neighbours(context, update, ed_neighbours):
-    for neighbour in ed_neighbours:
-        if not neighbour.get('matched', False):
-            await context.bot.send_message(chat_id=update.effective_chat.id,
-                                           text='Не удалось распарсить запись из ЭД:\n'+neighbour['contactInfo']['localAddress']+'\n'+neighbour['contactInfo']['nickName']+'\nflat: '+neighbour['contactInfo']['flat']+'\nroomNumber: '+neighbour['contactInfo']['roomNumber'],
-                                           reply_to_message_id=update.message.message_id)
-            time.sleep(1)
-
-
-async def bot_command_send_ed_notifications(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                                   text='Собираю базу незарегистрированных...',
-                                   reply_to_message_id=update.message.message_id)
-
-    persons_per_objs = get_persons_per_objects(chat_building)
-    ed_neighbours = load_ed_neighbours()
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                                   text='Рассылаю сообщения...',
-                                   reply_to_message_id=update.message.message_id)
-
-    message_text = 'Здравствуйте\!\nПожалуйста, зарегистрируйтесь на портале Электронный Дом, чтобы принять участие в электронном собрании собственников\. Регистрация займет немного времени\.\n\nНичего сложного, что делать по шагам для вас расписано в [этой очень простой инструкции](https://sal34.notion.site/acc41138ac1548109a8d53a89ac6f4f5#f1bdc1cdb211485e8aedcff32792ac8e)\n\nНе откладывайте, зарегистрируйтесь на портале как можно скорее, это очень важно для дома\! Если возникнут проблемы \- обращайтесь за помощью к администраторам @iLeonidze @Foeniculum @Vladislav\_T\_T'
-
-    messages_sent = []
-
-    for obj_type, objs in persons_per_objs.items():
-        for obj_number, obj_details in objs.items():
-            registered = is_ed_neighbour(ed_neighbours, obj_type, obj_number, obj_details)
-
-            if registered != 'НЕ ЗАРЕГИСТРИРОВАН':
-                continue
-
-            for user_type in list(obj_details['persons'].keys()):
-                for person in obj_details['persons'][user_type]:
-                    if isinstance(person, User) and person.telegram_id not in messages_sent and (person.context['stats']['sended_private_messages_total'] > 0 or person.context['private_chat']['bot_started']):
-
-                        await asyncio.sleep(3)
-                        await context.bot.send_message(chat_id=update.effective_chat.id,
-                                                        text='Отправляю сообщение для ' + person.get_linked_fullname() + ' ' + '`' + str(person.telegram_id) + '`',
-                                                        parse_mode='MarkdownV2',
-                                                        reply_to_message_id=update.message.message_id)
-                        try:
-                            await context.bot.send_message(chat_id=person.telegram_id,
-                                                           text=message_text,
-                                                           disable_web_page_preview=True,
-                                                           parse_mode='MarkdownV2')
-
-                            if user_type != 'owner':
-                                await asyncio.sleep(1)
-                                await context.bot.send_message(chat_id=person.telegram_id,
-                                                               text='⚠ Обязательно передайте эту информацию вашему собственнику!')
-                        except Exception as e:
-                            await context.bot.send_message(chat_id=update.effective_chat.id,
-                                                           text='⚠️⚠️⚠️ Не удалось отправить сообщение для ' + str(person.telegram_id) + ', причина: ' + str(e),
-                                                           reply_to_message_id=update.message.message_id)
-
-                        messages_sent.append(person.telegram_id)
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                                   text='Готово! Все сообщения с уведомлениями разосланы',
-                                   reply_to_message_id=update.message.message_id)
+                                   text=f'Выберите куда необходимо добавить всех пользователей',
+                                   reply_markup=reply_markup)
 
 
 async def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_args):
@@ -2808,7 +2235,7 @@ async def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_
     logging.debug(f'Admin requested add users to chat {requested_chat_id} "{get_chat_name_by_chat(requested_chat)}"!')
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Начинаю добавление в чат "{get_chat_name_by_chat(requested_chat)}" всех пользователей...')
+                                   text=f'Начинаю добавление в чат "{get_chat_name_by_chat(requested_chat)}" всех пользователей...')
 
     users = get_all_users(chat_building)
     for i, user in enumerate(users):
@@ -2820,24 +2247,25 @@ async def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_
         if not user.add_to_group or not user.is_chat_related(int(requested_chat_id)):
             # context.bot.send_message(chat_id=update.effective_chat.id,
             #                          text=f'{i+1}/{len(users)} ПРОПУЩЕН "{user.get_fullname()}"')
-            logging.debug(f'{user.get_fullname()} skipped\nadd_to_group: {user.add_to_group}\nchat_related: {user.is_chat_related(int(requested_chat_id))}')
+            logging.debug(
+                f'{user.get_fullname()} skipped\nadd_to_group: {user.add_to_group}\nchat_related: {user.is_chat_related(int(requested_chat_id))}')
             time.sleep(30)
             continue
 
         try:
             await user.add_to_chat(int(requested_chat_id))
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'{i+1}/{len(users)} добавлен "{user.get_fullname()}"')
+                                           text=f'{i + 1}/{len(users)} добавлен "{user.get_fullname()}"')
             time.sleep(60)
         except Exception as e:
             print('An exception occurred')
             print(traceback.format_exc())
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'{i+1}/{len(users)} НЕ УДАЛОСЬ ДОБАВИТЬ "{user.get_fullname()}"\n\n{str(e)}')
+                                           text=f'{i + 1}/{len(users)} НЕ УДАЛОСЬ ДОБАВИТЬ "{user.get_fullname()}"\n\n{str(e)}')
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Все пользователи добавлены!',
-                             reply_to_message_id=update.message.message_id)
+                                   text='Все пользователи добавлены!',
+                                   reply_to_message_id=update.message.message_id)
 
 
 def schedule_garbage_message_deletion(update: Update, timeout: int):
@@ -2980,9 +2408,9 @@ async def cb_change_fullname(update: Update, context: CallbackContext, *input_ar
 
         if len(new_name_parts) < 2 or len(new_name_parts) > 3:
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text='Неверно введено ФИО, попробуйте снова.',
-                                     reply_markup=ForceReply(force_reply=False),
-                                     reply_to_message_id=update.message.message_id)
+                                           text='Неверно введено ФИО, попробуйте снова.',
+                                           reply_markup=ForceReply(force_reply=False),
+                                           reply_to_message_id=update.message.message_id)
             return
 
         text = f'Житель [{user.get_fullname()}](https://t.me/{user.telegram_id}) успешно переименован, новое имя "{new_name}"'
@@ -2990,16 +2418,16 @@ async def cb_change_fullname(update: Update, context: CallbackContext, *input_ar
         user.change_fullname(*new_name_parts)
 
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=text,
-                                 parse_mode='MarkdownV2',
-                                 reply_markup=ForceReply(force_reply=False),
-                                 reply_to_message_id=update.message.message_id)
+                                       text=text,
+                                       parse_mode='MarkdownV2',
+                                       reply_markup=ForceReply(force_reply=False),
+                                       reply_to_message_id=update.message.message_id)
         return
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Чтобы сменить имя жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) отправьте в ответ новое полное имя',
-                             parse_mode='MarkdownV2',
-                             reply_markup=ForceReply(force_reply=True))
+                                   text=f'Чтобы сменить имя жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) отправьте в ответ новое полное имя',
+                                   parse_mode='MarkdownV2',
+                                   reply_markup=ForceReply(force_reply=True))
 
 
 async def cb_change_user_type(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3026,8 +2454,8 @@ async def cb_change_user_type(update: Update, context: CallbackContext, *input_a
 
         if new_type_i == -1:
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text='Неверно выбран тип жителя, попробуйте снова.',
-                                     reply_to_message_id=update.message.message_id)
+                                           text='Неверно выбран тип жителя, попробуйте снова.',
+                                           reply_to_message_id=update.message.message_id)
             return
 
         text = f'Тип жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) успешно сменен на "{new_type}"'
@@ -3035,18 +2463,18 @@ async def cb_change_user_type(update: Update, context: CallbackContext, *input_a
         user.change_user_type(new_type_i)
 
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=text,
-                                 parse_mode='MarkdownV2',
-                                 reply_to_message_id=update.message.message_id)
+                                       text=text,
+                                       parse_mode='MarkdownV2',
+                                       reply_to_message_id=update.message.message_id)
         return
 
     buttons_list = [[KeyboardButton('собственник')], [KeyboardButton('пользователь')]]
     keyboard = ReplyKeyboardMarkup(buttons_list, resize_keyboard=False, one_time_keyboard=True)
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Чтобы сменить тип жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) выберите на клавиатуре подходящий тип и отправьте в ответ',
-                             parse_mode='MarkdownV2',
-                             reply_markup=keyboard)
+                                   text=f'Чтобы сменить тип жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) выберите на клавиатуре подходящий тип и отправьте в ответ',
+                                   parse_mode='MarkdownV2',
+                                   reply_markup=keyboard)
 
 
 async def cb_change_phone(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3067,8 +2495,8 @@ async def cb_change_phone(update: Update, context: CallbackContext, *input_args)
 
         if new_phone[0] != '+' or len(new_phone) != 12:
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text='Неверно введен номер телефона, попробуйте снова.',
-                                     reply_to_message_id=update.message.message_id)
+                                           text='Неверно введен номер телефона, попробуйте снова.',
+                                           reply_to_message_id=update.message.message_id)
             return
 
         text = f'Номер телефона жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) успешно сменен, новый номер "\\{new_phone}"'
@@ -3076,14 +2504,14 @@ async def cb_change_phone(update: Update, context: CallbackContext, *input_args)
         user.change_phone(new_phone)
 
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=text,
-                                 parse_mode='MarkdownV2',
-                                 reply_to_message_id=update.message.message_id)
+                                       text=text,
+                                       parse_mode='MarkdownV2',
+                                       reply_to_message_id=update.message.message_id)
         return
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Чтобы сменить номер телефона жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) отправьте в ответ новый номер телефона, начинающийся с \\+7 и полностью состоящий из цифр, без пробелов и других символов',
-                             parse_mode='MarkdownV2')
+                                   text=f'Чтобы сменить номер телефона жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) отправьте в ответ новый номер телефона, начинающийся с \\+7 и полностью состоящий из цифр, без пробелов и других символов',
+                                   parse_mode='MarkdownV2')
 
 
 async def cb_change_phone_visibility(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3110,8 +2538,8 @@ async def cb_change_phone_visibility(update: Update, context: CallbackContext, *
 
         if new_visibility_bool is None:
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text='Неверно выбран тип видимости телефона жителя, попробуйте снова.',
-                                     reply_to_message_id=update.message.message_id)
+                                           text='Неверно выбран тип видимости телефона жителя, попробуйте снова.',
+                                           reply_to_message_id=update.message.message_id)
             return
 
         text = f'Видимость телефона жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) успешно сменена на "{new_visibility}"'
@@ -3119,18 +2547,18 @@ async def cb_change_phone_visibility(update: Update, context: CallbackContext, *
         user.change_phone_visibility(new_visibility_bool)
 
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=text,
-                                 parse_mode='MarkdownV2',
-                                 reply_to_message_id=update.message.message_id)
+                                       text=text,
+                                       parse_mode='MarkdownV2',
+                                       reply_to_message_id=update.message.message_id)
         return
 
     buttons_list = [[KeyboardButton('виден'), KeyboardButton('скрыт')]]
     keyboard = ReplyKeyboardMarkup(buttons_list, resize_keyboard=False, one_time_keyboard=True)
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Чтобы сменить видимость телефона жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) выберите на клавиатуре подходящий тип и отправьте в ответ',
-                             parse_mode='MarkdownV2',
-                             reply_markup=keyboard)
+                                   text=f'Чтобы сменить видимость телефона жителя [{user.get_fullname()}](https://t.me/{user.telegram_id}) выберите на клавиатуре подходящий тип и отправьте в ответ',
+                                   parse_mode='MarkdownV2',
+                                   reply_markup=keyboard)
 
 
 def get_chat_name_by_chat(chat) -> str:
@@ -3171,26 +2599,26 @@ async def cb_add_to_chats(update: Update, context: CallbackContext, *input_args)
         target_chat_request = input_args[1]
         if target_chat_request == 'links':
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'Запрошен список ссылок для пользователя "{user.get_fullname()}". Перешлите ему следующее сообщение с приглашением:')
+                                           text=f'Запрошен список ссылок для пользователя "{user.get_fullname()}". Перешлите ему следующее сообщение с приглашением:')
             invite_links = await tg_client_get_invites_for_chats(user.get_related_chats_ids())
             invite_links_str = "\n".join(invite_links)
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'Добро пожаловать! Заходите в чаты по ссылкам:\n{invite_links_str}\n\nСсылками можно воспользоваться один раз и они действительны 24 часа')
+                                           text=f'Добро пожаловать! Заходите в чаты по ссылкам:\n{invite_links_str}\n\nСсылками можно воспользоваться один раз и они действительны 24 часа')
         elif target_chat_request == 'all':
             try:
                 await user.add_to_all_chats()
                 await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Пользователь "{user.get_fullname()}" добавлен во все чаты')
+                                               text=f'Пользователь "{user.get_fullname()}" добавлен во все чаты')
             except UserPrivacyRestrictedError as e:
                 await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Пользователь "{user.get_fullname()}" запретил приглашать его в группы. Перешлите ему следующее сообщение с приглашением:')
+                                               text=f'Пользователь "{user.get_fullname()}" запретил приглашать его в группы. Перешлите ему следующее сообщение с приглашением:')
                 invite_links = await tg_client_get_invites_for_chats(user.get_related_chats_ids())
                 invite_links_str = "\n".join(invite_links)
                 await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Добро пожаловать! Заходите в чаты по ссылкам:\n{invite_links_str}\n\nСсылками можно воспользоваться один раз и они действительны 24 часа')
+                                               text=f'Добро пожаловать! Заходите в чаты по ссылкам:\n{invite_links_str}\n\nСсылками можно воспользоваться один раз и они действительны 24 часа')
             except Exception as e:
                 await  context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Не удалось добавить пользователя "{user.get_fullname()}" во все чаты\n\n{str(e)}')
+                                                text=f'Не удалось добавить пользователя "{user.get_fullname()}" во все чаты\n\n{str(e)}')
         else:
             found_chat = None
             for chat in user.get_related_chats():
@@ -3206,22 +2634,22 @@ async def cb_add_to_chats(update: Update, context: CallbackContext, *input_args)
             try:
                 await user.add_to_chat(int(target_chat_request))
                 await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Пользователь "{user.get_fullname()}" добавлен в чат "{chat_name}"')
+                                               text=f'Пользователь "{user.get_fullname()}" добавлен в чат "{chat_name}"')
             except UserPrivacyRestrictedError as e:
                 await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Пользователь "{user.get_fullname()}" запретил приглашать его в группы. Перешлите ему следующее сообщение с приглашением:')
+                                               text=f'Пользователь "{user.get_fullname()}" запретил приглашать его в группы. Перешлите ему следующее сообщение с приглашением:')
                 invite_link = await tg_client_get_invite_for_chat(int(target_chat_request))
                 await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Заходите в чат по ссылке:\n{invite_link}\n\nСсылкой можно воспользоваться один раз и она действительна 24 часа')
+                                               text=f'Заходите в чат по ссылке:\n{invite_link}\n\nСсылкой можно воспользоваться один раз и она действительна 24 часа')
             except Exception as e:
                 await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f'Не удалось добавить пользователя "{user.get_fullname()}" в чат "{chat_name}"\n\n{str(e)}')
+                                               text=f'Не удалось добавить пользователя "{user.get_fullname()}" в чат "{chat_name}"\n\n{str(e)}')
 
         return
 
     buttons = [
-            [InlineKeyboardButton("Добавить везде", callback_data=f'add_to_chats|{user.telegram_id}|all')]
-        ]
+        [InlineKeyboardButton("Добавить везде", callback_data=f'add_to_chats|{user.telegram_id}|all')]
+    ]
 
     user_related_chats = user.get_related_chats()
 
@@ -3239,14 +2667,15 @@ async def cb_add_to_chats(update: Update, context: CallbackContext, *input_args)
         else:
             chat_emoji = GROUPS_IDS_EMOJI[chat['name']]
 
-        buttons.append([InlineKeyboardButton(f'{chat_emoji} {chat_name}', callback_data=f'add_to_chats|{user.telegram_id}|{chat["id"]}')])
+        buttons.append([InlineKeyboardButton(f'{chat_emoji} {chat_name}',
+                                             callback_data=f'add_to_chats|{user.telegram_id}|{chat["id"]}')])
 
     buttons.append([InlineKeyboardButton("Список ссылок", callback_data=f'add_to_chats|{user.telegram_id}|links')])
 
     reply_markup = InlineKeyboardMarkup(buttons)
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Выберите куда необходимо добавить пользователя "{user.get_fullname()}"',
-                             reply_markup=reply_markup)
+                                   text=f'Выберите куда необходимо добавить пользователя "{user.get_fullname()}"',
+                                   reply_markup=reply_markup)
 
 
 async def cb_remove_from_chats(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3267,7 +2696,7 @@ async def cb_remove_from_chats(update: Update, context: CallbackContext, *input_
         if target_chat_request == 'all':
             user.remove_from_all_chats()
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'Житель "{user.get_fullname()}" удален из всех чатов')
+                                           text=f'Житель "{user.get_fullname()}" удален из всех чатов')
         else:
             found_chat = None
             for chat in user.get_related_chats():
@@ -3283,24 +2712,25 @@ async def cb_remove_from_chats(update: Update, context: CallbackContext, *input_
             await user.remove_from_chat(target_chat_request)
 
             await context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text=f'Житель "{user.get_fullname()}" удален из чата "{chat_name}"')
+                                           text=f'Житель "{user.get_fullname()}" удален из чата "{chat_name}"')
 
         return
 
     buttons = [
-            [InlineKeyboardButton("Удалить отовсюду", callback_data=f'remove_from_chats|{user.telegram_id}|all')]
-        ]
+        [InlineKeyboardButton("Удалить отовсюду", callback_data=f'remove_from_chats|{user.telegram_id}|all')]
+    ]
 
     user_related_chats = user.get_related_chats()
 
     for chat in user_related_chats:
         chat_name = get_chat_name_by_chat(chat)
-        buttons.append([InlineKeyboardButton(f'{chat_name}', callback_data=f'remove_from_chats|{user.telegram_id}|{chat["id"]}')])
+        buttons.append(
+            [InlineKeyboardButton(f'{chat_name}', callback_data=f'remove_from_chats|{user.telegram_id}|{chat["id"]}')])
 
     reply_markup = InlineKeyboardMarkup(buttons)
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Выберете откуда необходимо удалить жителя "{user.get_fullname()}"',
-                             reply_markup=reply_markup)
+                                   text=f'Выберете откуда необходимо удалить жителя "{user.get_fullname()}"',
+                                   reply_markup=reply_markup)
 
 
 async def cb_lock_bot_access(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3318,7 +2748,7 @@ async def cb_lock_bot_access(update: Update, context: CallbackContext, *input_ar
 
     if not user.is_identified():
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                text=f'Нельзя отозвать доступ у жителя {input_args}')
+                                       text=f'Нельзя отозвать доступ у жителя {input_args}')
         return
 
     reply_markup = InlineKeyboardMarkup([
@@ -3329,8 +2759,8 @@ async def cb_lock_bot_access(update: Update, context: CallbackContext, *input_ar
     ])
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Подтвердите отзыв доступа к боту для жителя "{user.get_fullname()}"',
-                             reply_markup=reply_markup)
+                                   text=f'Подтвердите отзыв доступа к боту для жителя "{user.get_fullname()}"',
+                                   reply_markup=reply_markup)
 
 
 async def cb_lock_bot_access_submit(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3348,14 +2778,14 @@ async def cb_lock_bot_access_submit(update: Update, context: CallbackContext, *i
 
     if not user.is_identified():
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=f'Нельзя отозвать доступ у жителя {input_args}')
+                                       text=f'Нельзя отозвать доступ у жителя {input_args}')
         return
 
     fullname = user.get_fullname()
     user.lock_bot_access()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Доступ к боту отозван у жителя "{fullname}"')
+                                   text=f'Доступ к боту отозван у жителя "{fullname}"')
 
 
 async def cb_deactivate_user(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3373,7 +2803,7 @@ async def cb_deactivate_user(update: Update, context: CallbackContext, *input_ar
 
     if not user.is_identified():
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                text=f'Нельзя деактивировать жителя {input_args}')
+                                       text=f'Нельзя деактивировать жителя {input_args}')
         return
 
     reply_markup = InlineKeyboardMarkup([
@@ -3384,8 +2814,8 @@ async def cb_deactivate_user(update: Update, context: CallbackContext, *input_ar
     ])
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Подтвердите дективировацию жителя "{user.get_fullname()}"\nЭто действие приведет к удалению из всех чатов и отзыву доступа к боту',
-                             reply_markup=reply_markup)
+                                   text=f'Подтвердите дективировацию жителя "{user.get_fullname()}"\nЭто действие приведет к удалению из всех чатов и отзыву доступа к боту',
+                                   reply_markup=reply_markup)
 
 
 async def cb_deactivate_user_submit(update: Update, context: CallbackContext, *input_args) -> None:
@@ -3403,14 +2833,14 @@ async def cb_deactivate_user_submit(update: Update, context: CallbackContext, *i
 
     if not user.is_identified():
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=f'Нельзя деактивировать жителя {input_args}')
+                                       text=f'Нельзя деактивировать жителя {input_args}')
         return
 
     fullname = user.get_fullname()
     user.deactivate()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
-                             text=f'Житель "{fullname}" деактивирован')
+                                   text=f'Житель "{fullname}" деактивирован')
 
 
 def raw_try_respond_to_cb_action_message(update: Update, context: CallbackContext) -> bool:
@@ -3459,7 +2889,6 @@ async def handle_button_callback(update: Update, context: CallbackContext) -> No
 
 
 def setup_command_handlers(application: Application):
-
     application.add_handler(MessageHandler(filters.ALL, stats_collector), group=-1)
 
     application.add_handler(MessageHandler(filters.ALL, bot_assistant_call), group=-2)
@@ -3529,29 +2958,11 @@ def setup_command_handlers(application: Application):
     reload_db_handler = CommandHandler('stop_actions_queue', bot_command_stop_actions_queue)
     application.add_handler(reload_db_handler)
 
-    reload_db_handler = CommandHandler('add_all_users_to_chats', bot_command_add_all_users_to_chats)
-    application.add_handler(reload_db_handler)
-
     reload_db_handler = CommandHandler('add_all_users_to_chat', bot_command_add_all_users_to_chat)
     application.add_handler(reload_db_handler)
 
-    get_unknown_neighbours_db_handler = CommandHandler('get_unknown_neighbours_file', bot_command_get_unknown_neighbours_file)
-    application.add_handler(get_unknown_neighbours_db_handler)
-
-    get_non_ready_neighbours_handler = CommandHandler('get_non_ready_neighbours', bot_command_get_non_ready_neighbours)
-    application.add_handler(get_non_ready_neighbours_handler)
-
-    send_ed_notifications_handler = CommandHandler('send_ed_notifications', bot_command_send_ed_notifications)
-    application.add_handler(send_ed_notifications_handler)
-
-    get_potential_neighbours_issues = CommandHandler('get_potential_neighbours_issues', bot_command_get_potential_neighbours_issues)
-    application.add_handler(get_potential_neighbours_issues)
-
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
     application.add_handler(revalidate_users_groups_handler)
-
-    parse_address_handler = CommandHandler('parse_address', bot_command_parse_address)
-    application.add_handler(parse_address_handler)
 
     # Other stuff
 
@@ -3569,8 +2980,8 @@ def start_telegram_client():
     client_api_hash = CONFIGS['service']['identity']['telegram']['client_api_hash']
 
     TG_CLIENT = TelegramClient('configs/telegram_client',
-                                            client_api_id,
-                                            client_api_hash)
+                               client_api_id,
+                               client_api_hash)
 
     TG_CLIENT.start()
 
