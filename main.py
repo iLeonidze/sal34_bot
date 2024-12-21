@@ -2119,6 +2119,12 @@ async def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
+async def bot_command_current_time(update: Update, _):
+    await TG_BOT.send_message(chat_id=update.effective_chat.id, text=str(datetime.datetime.now()))
+
+
 def schedule_garbage_message_deletion(update: Update, timeout: int):
     logging.debug('Scheduled message deletion as a garbage')
     QUEUED_ACTIONS.append({
@@ -2799,6 +2805,9 @@ def setup_command_handlers(application: Application):
 
     revalidate_users_groups_handler = CommandHandler('revalidate_users_groups', bot_command_revalidate_users_groups)
     application.add_handler(revalidate_users_groups_handler)
+
+    current_time_handler = CommandHandler('current_time', bot_command_current_time)
+    application.add_handler(current_time_handler)
 
     # Other stuff
 
