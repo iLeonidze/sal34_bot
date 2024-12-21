@@ -9,6 +9,7 @@ import time
 import traceback
 from asyncio import Task
 from typing import Dict, List, Any
+from functools import wraps
 
 import emoji
 
@@ -163,26 +164,26 @@ def is_repeated_symbol(s):
     return len(set(s.lower())) == 1
 
 
-def is_bot_started_in_obj_details(obj_details):
-    for owner in obj_details['persons']['owners']:
-        if isinstance(owner, User) and (
-                owner.context['stats']['sended_private_messages_total'] > 0 or owner.context['private_chat'][
-            'bot_started']):
-            return 'ЗАПУЩЕН'
+def admin_chat_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        is_found_chat, chat_building, is_admin_chat, _, _, _ = identify_chat_by_tg_update(update)
+        if not is_admin_chat:
+            await bot_send_message_this_command_bot_not_allowed_here(update, context)
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
 
-    for resident in obj_details['persons']['residents']:
-        if isinstance(resident, User) and (
-                resident.context['stats']['sended_private_messages_total'] > 0 or resident.context['private_chat'][
-            'bot_started']):
-            return 'ЗАПУЩЕН, ТОЛЬКО У ПРОЖИВАЮЩЕГО'
 
-    for rent in obj_details['persons']['rents']:
-        if isinstance(rent, User) and (
-                rent.context['stats']['sended_private_messages_total'] > 0 or rent.context['private_chat'][
-            'bot_started']):
-            return 'ЗАПУЩЕН, ТОЛЬКО У АРЕНДАТОРА'
-
-    return 'НЕ ЗАПУЩЕН'
+def authorized_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        user = USERS_CACHE.get_user(update)
+        if not user.is_identified():
+            await bot_send_message_user_not_authorized(update, context)
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
 
 
 class User:
@@ -1163,7 +1164,7 @@ async def bot_send_message_user_not_authorized(update: Update, context: Callback
                                    reply_to_message_id=update.message.message_id)
 
 
-async def bot_send_message_this_command_bot_allowed_here(update: Update, context: CallbackContext):
+async def bot_send_message_this_command_bot_not_allowed_here(update: Update, context: CallbackContext):
     text = f'Эта команда недопустима здесь'
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text=text,
@@ -1216,7 +1217,7 @@ def set_keyboard_context(name: str):
 
 async def bot_command_start(update: Update, context: CallbackContext):
     if update.message.chat.type != 'private':
-        await bot_send_message_this_command_bot_allowed_here(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     this_user = USERS_CACHE.get_user(update)
@@ -1384,17 +1385,14 @@ def get_neighbours_list_str(neighbours: Dict[str, Dict[str, Dict[str, Any[str, L
     return text.strip()
 
 
+@authorized_only
 async def bot_command_neighbours(update: Update, context: CallbackContext):
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
     this_user = USERS_CACHE.get_user(update)
 
     if update.effective_chat.type != 'private' and not is_found_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     if is_admin_chat:
@@ -1461,7 +1459,7 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
     this_user = USERS_CACHE.get_user(update)
 
     if update.effective_chat.type != 'private' and not is_found_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     if not this_user.is_identified():
@@ -1662,7 +1660,7 @@ async def bot_command_stats(update: Update, context: CallbackContext):
 
     # TODO: allow users for asking stats in private messages
     if not is_found_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     if not this_user.is_identified():
@@ -1841,7 +1839,7 @@ async def bot_command_reload_db(update: Update, context: CallbackContext):
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     if not this_user.is_identified():
@@ -1857,19 +1855,9 @@ async def bot_command_reload_db(update: Update, context: CallbackContext):
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_reload(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested caches eviction!')
 
     USERS_CACHE.evict()
@@ -1880,19 +1868,9 @@ async def bot_command_reload(update: Update, context: CallbackContext):
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_start_tables_sync(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested tables sync start!')
 
     start_tables_synchronization()
@@ -1902,19 +1880,9 @@ async def bot_command_start_tables_sync(update: Update, context: CallbackContext
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_stop_tables_sync(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested tables sync stop!')
 
     stop_tables_synchronization()
@@ -1924,19 +1892,9 @@ async def bot_command_stop_tables_sync(update: Update, context: CallbackContext)
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_flush_users_context(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested users context flush!')
 
     USERS_CACHE.save_users()
@@ -1946,19 +1904,9 @@ async def bot_command_flush_users_context(update: Update, context: CallbackConte
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_flush_all_users_context(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested all users force context flush!')
 
     USERS_CACHE.save_all_users()
@@ -1968,19 +1916,9 @@ async def bot_command_flush_all_users_context(update: Update, context: CallbackC
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_start_users_context_autosave(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested start users context autosave!')
 
     start_users_context_save()
@@ -1990,19 +1928,9 @@ async def bot_command_start_users_context_autosave(update: Update, context: Call
                                     reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_stop_users_context_autosave(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested stop users context autosave!')
 
     stop_users_context_save()
@@ -2012,19 +1940,9 @@ async def bot_command_stop_users_context_autosave(update: Update, context: Callb
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_start_cached_users_stale(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested start users staling!')
 
     start_caches_stale()
@@ -2034,19 +1952,9 @@ async def bot_command_start_cached_users_stale(update: Update, context: Callback
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_stop_cached_users_stale(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested stop users staling!')
 
     stop_caches_stale()
@@ -2063,19 +1971,9 @@ async def bot_command_recalculate_stats(update: Update, context: CallbackContext
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_reset_actions_queue(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested actions queue reset!')
 
     reset_actions_queue()
@@ -2085,19 +1983,9 @@ async def bot_command_reset_actions_queue(update: Update, context: CallbackConte
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_start_actions_queue(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested start actions queue!')
 
     start_actions_queue()
@@ -2107,19 +1995,9 @@ async def bot_command_start_actions_queue(update: Update, context: CallbackConte
                                    reply_to_message_id=update.message.message_id)
 
 
+@authorized_only
+@admin_chat_only
 async def bot_command_stop_actions_queue(update: Update, context: CallbackContext):
-    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
-        = identify_chat_by_tg_update(update)
-    this_user = USERS_CACHE.get_user(update)
-
-    if not is_admin_chat:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
-        return
-
-    if not this_user.is_identified():
-        await bot_send_message_user_not_authorized(update, context)
-        return
-
     logging.debug('Admin requested stop actions queue!')
 
     stop_actions_queue()
@@ -2135,7 +2013,7 @@ async def bot_command_revalidate_users_groups(update: Update, context: CallbackC
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     if not this_user.is_identified():
@@ -2182,7 +2060,7 @@ async def bot_command_add_all_users_to_chat(update: Update, context: CallbackCon
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     if not this_user.is_identified():
@@ -2212,7 +2090,7 @@ async def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_
     this_user = USERS_CACHE.get_user(update)
 
     if not is_admin_chat or not chat_building:
-        await bot_send_message_this_command_bot_allowed_here(update, context)
+        await bot_send_message_this_command_bot_not_allowed_here(update, context)
         return
 
     if not this_user.is_identified():
