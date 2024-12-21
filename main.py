@@ -623,7 +623,7 @@ class User:
 
 async def is_user_added_to_groups(telegram_id: int, groups_ids: List[int]) -> bool:
     for group_id in groups_ids:
-        time.sleep(2)
+        await asyncio.sleep(2)
         try:
             result = await TG_BOT.get_chat_member(group_id, telegram_id)
             if not isinstance(result, ChatMember) or result.status not in ['member', 'administrator', 'creator']:
@@ -2249,14 +2249,14 @@ async def cb_bulk_add_to_chats(update: Update, context: CallbackContext, *input_
             #                          text=f'{i+1}/{len(users)} ПРОПУЩЕН "{user.get_fullname()}"')
             logging.debug(
                 f'{user.get_fullname()} skipped\nadd_to_group: {user.add_to_group}\nchat_related: {user.is_chat_related(int(requested_chat_id))}')
-            time.sleep(30)
+            await asyncio.sleep(30)
             continue
 
         try:
             await user.add_to_chat(int(requested_chat_id))
             await context.bot.send_message(chat_id=update.effective_chat.id,
                                            text=f'{i + 1}/{len(users)} добавлен "{user.get_fullname()}"')
-            time.sleep(60)
+            await asyncio.sleep(60)
         except Exception as e:
             print('An exception occurred')
             print(traceback.format_exc())
