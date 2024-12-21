@@ -5,3 +5,5 @@ data
 configs
 help.yaml
 cadnums*
+.idea
+*.iml

@@ -1,8 +1,9 @@
 version: '3'
 services:
-  app:
+  sal34_bot:
     image: ghcr.io/ileonidze/sal34_bot:latest
-    restart: always
+    container_name: sal34_bot
+    restart: unless-stopped
     volumes:
       - ./buildings:/opt/bot/buildings
       - ./configs:/opt/bot/configs

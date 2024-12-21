@@ -1,3 +1,4 @@
+import logging
 import os.path
 import re
 import os
@@ -12,7 +13,8 @@ help_file_path = './help.yaml'
 
 
 def is_bot_assistant_request(update: Update) -> bool:
-    return update.message.text is not None and \
+    return update.message and \
+           update.message.text is not None and \
            update.message.text[0] != '/' and \
            (update.message.text.lower()[:4] == 'бот,' or
             update.message.chat.type == 'private' or
@@ -71,8 +73,8 @@ def is_activation_phrase(update: Update) -> bool:
 
 
 def get_command_handler_by_name(context: CallbackContext, command_name) -> Callable or None:
-    for handler in context.dispatcher.handlers[0]:
-        if isinstance(handler, CommandHandler) and handler.command[0] == command_name:
+    for handler in context.application.handlers[0]:
+        if isinstance(handler, CommandHandler) and next(iter(handler.commands)) == command_name:
             return handler.callback
     return None
 
@@ -109,9 +111,9 @@ class HelpAssistant:
                 entry['test_queries'] = row[5].strip().split('\n')
 
                 self.db.append(entry)
-                print(f"Loaded \"{row[0]}\" entry")
+                logging.debug(f"Loaded \"{row[0]}\" entry")
 
-        print(f'Loaded {len(self.db)} assistant entries')
+        # logging.debug(f'Loaded {len(self.db)} assistant entries')
 
     def load_from_file_v1(self):
         if not os.path.isfile(help_file_path):
@@ -128,7 +130,7 @@ class HelpAssistant:
                 query['query'][i] = substrings_raw.split('|')
             self.db.append(query)
 
-    def proceed_request(self, update: Update, context: CallbackContext, user, building_chats):
+    async def proceed_request(self, update: Update, context: CallbackContext, user, building_chats):
         query_text = update.message.text.lower().replace('бот,', '').strip()
         response = self.proceed_query_v2(query_text)
 
@@ -139,25 +141,25 @@ class HelpAssistant:
                     admin_chat = chat['id']
                     break
             if admin_chat is not None:
-                return context.bot.send_message(
+                return await context.bot.send_message(
                     chat_id=admin_chat,
                     parse_mode='MarkdownV2',
                     text=f"Неизвестный запрос ассистенту от {user.get_linked_fullname()}:\n`{query_text}`"
                 )
         elif response.get('response'):
-            return context.bot.send_message(
+            return await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=response['response'],
                 reply_to_message_id=update.message.message_id
             )
         elif response.get('forward'):
-            return context.bot.forward_message(
+            return await context.bot.forward_message(
                 update.effective_chat.id,
                 response['forward'][0],
                 response['forward'][1]
             )
         elif response.get('command'):
-            return get_command_handler_by_name(context, response['command'])(update, context)
+            return await get_command_handler_by_name(context, response['command'])(update, context)
 
     def proceed_query_v1(self, query_text: str) -> Dict or None:
         response = None
