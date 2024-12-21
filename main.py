@@ -950,7 +950,7 @@ def is_common_group_chat(building, chat_id):
     return False
 
 
-def reload_configs():
+async def reload_configs():
     global CONFIGS
     global DB
 
@@ -969,7 +969,7 @@ def reload_configs():
             STATS[stats_name] = json.load(s)
 
 
-def connect_google_service():
+async def connect_google_service():
     global GOOGLE_CREDENTIALS
 
     filename = CONFIGS['service']['identity']['google']['filename']
@@ -1076,7 +1076,7 @@ async def reload_tables_periodically():
         await asyncio.sleep(CONFIGS['service']['scheduler']['sync_interval'])
 
 
-def start_tables_synchronization():
+async def start_tables_synchronization():
     global TABLES_SYNC_TASK
     if TABLES_SYNC_TASK is None:
         TABLES_SYNC_TASK = asyncio.create_task(reload_tables_periodically())
@@ -1095,7 +1095,7 @@ async def stale_caches_periodically():
         await asyncio.sleep(1)
 
 
-def start_caches_stale():
+async def start_caches_stale():
     global CACHES_STALE_TASK
     if CACHES_STALE_TASK is None:
         CACHES_STALE_TASK = asyncio.create_task(stale_caches_periodically())
@@ -1119,7 +1119,7 @@ async def proceed_actions_queue_periodically():
         await asyncio.sleep(1)
 
 
-def start_actions_queue():
+async def start_actions_queue():
     global ACTIONS_QUEUE_TASK
     if ACTIONS_QUEUE_TASK is None:
         ACTIONS_QUEUE_TASK = asyncio.create_task(proceed_actions_queue_periodically())
@@ -1138,7 +1138,7 @@ async def proceed_users_context_save_periodically():
         await asyncio.sleep(1)
 
 
-def start_users_context_save():
+async def start_users_context_save():
     global USERS_CONTEXT_SAVE_TASK
     if USERS_CONTEXT_SAVE_TASK is None:
         USERS_CONTEXT_SAVE_TASK = asyncio.create_task(proceed_users_context_save_periodically())
@@ -1870,7 +1870,7 @@ async def bot_command_reload(update: Update, context: CallbackContext):
 async def bot_command_start_tables_sync(update: Update, context: CallbackContext):
     logging.debug('Admin requested tables sync start!')
 
-    start_tables_synchronization()
+    await start_tables_synchronization()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text='Синхронизация таблиц запущена',
@@ -1918,7 +1918,7 @@ async def bot_command_flush_all_users_context(update: Update, context: CallbackC
 async def bot_command_start_users_context_autosave(update: Update, context: CallbackContext):
     logging.debug('Admin requested start users context autosave!')
 
-    start_users_context_save()
+    await start_users_context_save()
 
     await  context.bot.send_message(chat_id=update.effective_chat.id,
                                     text='Автоматическое отложенное сохранение запущено',
@@ -1942,7 +1942,7 @@ async def bot_command_stop_users_context_autosave(update: Update, context: Callb
 async def bot_command_start_cached_users_stale(update: Update, context: CallbackContext):
     logging.debug('Admin requested start users staling!')
 
-    start_caches_stale()
+    await start_caches_stale()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text='Устаревание кэшей запущено',
@@ -1985,7 +1985,7 @@ async def bot_command_reset_actions_queue(update: Update, context: CallbackConte
 async def bot_command_start_actions_queue(update: Update, context: CallbackContext):
     logging.debug('Admin requested start actions queue!')
 
-    start_actions_queue()
+    await start_actions_queue()
 
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text='Запущено исполнение запланированной очереди действий',
@@ -2690,7 +2690,41 @@ async def handle_button_callback(update: Update, context: CallbackContext) -> No
     await callback_functions[function_name](update, context, *payload)
 
 
+def prepare_debug_data(update, context):
+    debug_data = "Update ID: " + str(update.update_id)
+
+    debug_data += "\n\nUser"
+    debug_data += "\n ID: " + str(update['effective_user']['id'])
+    debug_data += "\n Full name: " + str(update['effective_user']['full_name'])
+    debug_data += "\n Username: @" + str(update['effective_user']['username'])
+    debug_data += "\n Link: " + str(update['effective_user']['link'])
+
+    debug_data += "\n\nMessage"
+    debug_data += "\n ID: " + str(update['effective_message']['id'])
+    debug_data += "\n Text: " + str(update['effective_message']['text'])
+
+    return debug_data
+
+
+def get_admin_group_id() -> int:
+    # TODO: remove this hardcode
+    for chat in CONFIGS['buildings']["34"]['groups']:
+        if chat['name'] == 'admin':
+            return chat['id']
+
+
+async def handle_bot_exception(update: Update, context: CallbackContext):
+    message = 'В работе бота sal34_bot возникла ошибка:\n' \
+              '```\n' + str(traceback.format_exc()) + '\n```' \
+              '\nDebug данные:\n```\n' + prepare_debug_data(update, context) + '\n```'
+
+    group_id = get_admin_group_id()
+    await TG_BOT.send_message(chat_id=group_id, text=message, parse_mode='MarkdownV2')
+
+
 def setup_command_handlers(application: Application):
+    application.add_error_handler(handle_bot_exception)
+
     application.add_handler(MessageHandler(filters.ALL, stats_collector), group=-1)
 
     application.add_handler(MessageHandler(filters.ALL, bot_assistant_call), group=-2)
@@ -2795,10 +2829,6 @@ async def serve_telegram_requests():
 
     builder = ApplicationBuilder()
     builder.token(token=CONFIGS['service']['identity']['telegram']['bot_token'])
-    # builder.connection_pool_size(50000)
-    # builder.get_updates_connection_pool_size(50000)
-    # builder.pool_timeout(100)
-    # builder.get_updates_pool_timeout(100)
 
     application: Application = builder.build()
 
@@ -2811,9 +2841,6 @@ async def serve_telegram_requests():
     await application.start()
 
     await application.updater.start_polling()
-
-    while True:
-        await asyncio.sleep(0.1)
 
 
 async def on_exit():
@@ -2846,15 +2873,20 @@ async def on_exit():
 
 async def main():
     try:
-        reload_configs()
+        await reload_configs()
         await start_telegram_client()
-        start_actions_queue()
-        start_users_context_save()
-        connect_google_service()
-        start_tables_synchronization()
-        start_caches_stale()
-        logging.info('Bot started')
+        await start_actions_queue()
+        await start_users_context_save()
+        await connect_google_service()
+        await start_tables_synchronization()
+        await start_caches_stale()
         await serve_telegram_requests()
+
+        logging.info('Bot started')
+
+        while True:
+            await asyncio.sleep(0.1)
+
     except Exception as e:
         traceback.print_exc()
     finally:
