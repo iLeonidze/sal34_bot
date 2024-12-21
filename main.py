@@ -2720,9 +2720,9 @@ def get_admin_group_id() -> int:
 
 
 async def handle_bot_exception(update: Update, context: CallbackContext):
-    message = 'В работе бота sal34_bot возникла ошибка:\n' \
-              '```\n' + str(traceback.format_exc()) + '\n```' \
-              '\nDebug данные:\n```\n' + prepare_debug_data(update, context) + '\n```'
+    message = 'В работе бота sal34\_bot возникла ошибка:\n' \
+              '```\n' + str(encode_markdown(traceback.format_exc())) + '\n```' \
+              '\nЗапрос:\n```\n' + encode_markdown(prepare_debug_data(update, context)) + '\n```'
 
     group_id = get_admin_group_id()
     await TG_BOT.send_message(chat_id=group_id, text=message, parse_mode='MarkdownV2')
