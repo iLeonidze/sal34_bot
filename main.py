@@ -42,6 +42,7 @@ TABLES_SYNC_TASK: None or Task = None
 CACHES_STALE_TASK: None or Task = None
 ACTIONS_QUEUE_TASK: None or Task = None
 USERS_CONTEXT_SAVE_TASK: None or Task = None
+SCHEDULED_TASKS_EXECUTION_TASK: None or Task = None
 GOOGLE_CREDENTIALS = None
 TG_BOT_APPLICATION: Application
 TG_BOT: Bot
@@ -200,6 +201,9 @@ def admin_chat_only(func):
 def authorized_only(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        # ignore messaged from non-users (e.g. technical stuff)
+        if update.effective_user is None:
+            return
         user = USERS_CACHE.get_user(update)
         if not user.is_identified():
             await bot_send_message_user_not_authorized(update, context)
@@ -211,6 +215,9 @@ def authorized_only(func):
 def ignore_unauthorized(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        # ignore messaged from non-users (e.g. technical stuff)
+        if update.effective_user is None:
+            return
         user = USERS_CACHE.get_user(update)
         if not user.is_identified():
             return
@@ -1132,6 +1139,25 @@ def stop_actions_queue():
         ACTIONS_QUEUE_TASK = None
 
 
+async def proceed_scheduled_tasks_periodically():
+    while True:
+        await proceed_scheduled_tasks()
+        await asyncio.sleep(1)
+
+
+async def start_scheduled_tasks():
+    global SCHEDULED_TASKS_EXECUTION_TASK
+    if SCHEDULED_TASKS_EXECUTION_TASK is None:
+        SCHEDULED_TASKS_EXECUTION_TASK = asyncio.create_task(proceed_scheduled_tasks_periodically())
+
+
+def stop_scheduled_tasks():
+    global SCHEDULED_TASKS_EXECUTION_TASK
+    if SCHEDULED_TASKS_EXECUTION_TASK is not None:
+        SCHEDULED_TASKS_EXECUTION_TASK.cancel()
+        SCHEDULED_TASKS_EXECUTION_TASK = None
+
+
 async def proceed_users_context_save_periodically():
     while True:
         proceed_users_context_save()
@@ -1182,6 +1208,10 @@ async def proceed_actions_queue():
         QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
 
 
+async def proceed_scheduled_tasks():
+    pass
+
+
 def proceed_users_context_save():
     interval = CONFIGS['service']['scheduler']['context_save_interval']
     if time.time() - USERS_CACHE.last_save_time > interval:
@@ -1198,14 +1228,15 @@ async def bot_send_message_user_not_authorized(update: Update, context: Callback
 
 
 async def bot_send_message_this_command_bot_not_allowed_here(update: Update, context: CallbackContext):
-    text = f'Эта команда недопустима здесь'
+    text = f'Эту команду нельзя использовать здесь'
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text=text,
                                    reply_to_message_id=update.message.message_id)
 
 
 async def start_identification(update: Update, context: CallbackContext):
-    text = f'Привет\\!\nЧтобы воспользоваться мной и попасть в закрытый чат, необходимо пройти идентификацию.'
+    text = encode_markdown(f'Привет!\nЧтобы воспользоваться мной и попасть в закрытый чат, необходимо пройти '
+                           f'идентификацию.')
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text=text, parse_mode='MarkdownV2')
     return
@@ -2164,6 +2195,10 @@ def raw_try_setup_garbage_deletion(update: Update, context: CallbackContext) -> 
 
 
 async def stats_collector(update: Update, context: CallbackContext):
+    # ignore when messages are not from the user (some other technical stuff)
+    if update.effective_user is None:
+        return False
+
     user = USERS_CACHE.get_user(update)
     chat_id = update.effective_chat.id
 
@@ -2223,6 +2258,9 @@ async def bot_added_user_handler(update: Update, context: CallbackContext):
 
 
 async def no_command_handler(update: Update, context: CallbackContext) -> None:
+    if not update.message:
+        return
+
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
 
@@ -2894,6 +2932,7 @@ async def main():
         await connect_google_service()
         await start_tables_synchronization()
         await start_caches_stale()
+        await start_scheduled_tasks()
         await serve_telegram_requests()
 
         logging.info('Bot started')
