@@ -56,6 +56,7 @@ CONFIGS = {
 STATS = {}
 
 DB = {}
+PARKING_CLEANING_DB = {}
 
 QUEUED_ACTIONS = []
 
@@ -115,6 +116,7 @@ GROUPS_IDS_EMOJI = {
 TABLES_RELOADED_TIME = 0
 LAST_STALED_USER_CACHE = time.time()
 QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
+LAST_PARKING_CLEANING_NOTIFICATION_DATE = None
 
 HELP_ASSISTANT: HelpAssistant
 
@@ -1016,6 +1018,22 @@ def reload_tables():
                 lambda x: x.strip() if isinstance(x, str) else x)
             DB[building_number]['user_type'] = DB[building_number]['user_type'].str.lower()
 
+            # PARKING CLEANING
+            spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['parking_cleaning']['id']
+            spreadsheet_range = CONFIGS['buildings'][building_number]['spreadsheet']['parking_cleaning']['range']
+
+            sheet = service.spreadsheets()
+            result = sheet.values().get(spreadsheetId=spreadsheet_id,
+                                        range=spreadsheet_range).execute()
+            rows = result.get('values', [])
+
+            if not rows:
+                logging.error('Syncing tables error PARKING CLEANING: No data')
+                return
+
+            PARKING_CLEANING_DB[building_number] = pd.DataFrame(rows, columns=['date', 'places']).map(
+                lambda x: x.strip() if isinstance(x, str) else x)
+
             # ASSISTANT
             spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['assistant']['id']
             spreadsheet_range = CONFIGS['buildings'][building_number]['spreadsheet']['assistant']['range']
@@ -1209,7 +1227,8 @@ async def proceed_actions_queue():
 
 
 async def proceed_scheduled_tasks():
-    pass
+    await execute_parking_cleaning_notifications()
+    # TODO: run other time-specific stuff
 
 
 def proceed_users_context_save():
@@ -1595,7 +1614,7 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
 
         text += '\nTG ID: `' + str(requested_user.telegram_id) + '`'
 
-        text += '\nE\-mail: '
+        text += '\nE\\-mail: '
         if requested_user.email:
             text += encode_markdown(requested_user.email)
         else:
@@ -1704,6 +1723,71 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
                                    reply_to_message_id=reply_to_message_id,
                                    parse_mode='MarkdownV2',
                                    reply_markup=reply_markup)
+
+
+async def prepare_parking_cleaning_notification_text(building_number) -> str or None:
+    current_date = datetime.datetime.now()
+    formatted_current_date = current_date.strftime("%d.%m.%Y")
+
+    df = PARKING_CLEANING_DB[building_number]
+    search = df[df["date"] == formatted_current_date]
+    if search.empty:
+        return None
+
+    places_raw = search.iloc[0]["places"]
+    places = []
+
+    for part in places_raw.split(";"):
+        part = part.strip()
+        if "-" in part:
+            start, end = map(int, part.split("-"))
+            places.extend(range(start, end + 1))
+        else:
+            places.append(int(part))
+
+    text = "Сегодня запланирована уборка следующих машиномест:"
+    for place in places:
+        text += f"\n\\- {place}"
+
+    return text
+
+
+async def execute_parking_cleaning_notifications():
+    global LAST_PARKING_CLEANING_NOTIFICATION_DATE
+
+    current_date = datetime.datetime.now()
+    formatted_current_date = current_date.strftime("%d.%m.%Y")
+
+    if LAST_PARKING_CLEANING_NOTIFICATION_DATE == formatted_current_date:
+        return
+
+    if current_date.hour != 8 or current_date.minute < 30:
+        return
+
+    for building_number, _ in PARKING_CLEANING_DB.items():
+        text = await prepare_parking_cleaning_notification_text(building_number)
+        if text is not None:
+            for chat in CONFIGS['buildings'][str(building_number)]['groups']:
+                if chat['name'] == 'private_section_group' and chat['section'] == 'p':
+                    await TG_BOT.send_message(chat_id=chat['id'], text=text, parse_mode='MarkdownV2')
+
+    LAST_PARKING_CLEANING_NOTIFICATION_DATE = formatted_current_date
+
+
+@authorized_only
+@admin_chat_only
+async def bot_command_test_parking_cleaning_notification(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
+    text = await prepare_parking_cleaning_notification_text(chat_building)
+    if text is None:
+        text = 'Уведомление отсутствует'
+
+    await context.bot.send_message(chat_id=update.effective_chat.id,
+                                   text=text,
+                                   reply_to_message_id=update.message.message_id,
+                                   parse_mode='MarkdownV2')
 
 
 @authorized_only
@@ -1839,11 +1923,8 @@ async def bot_command_help(update: Update, context: CallbackContext):
         ['add_all_users_to_chats', 'Принудительно добавляет всех пользователей в соответствующие им чаты'],
         ['add_all_users_to_chat', 'Принудительно добавляет всех пользователей в заданный чат'],
         ['revalidate_users_groups', 'Ревалидирует наличие пользователя в группах'],
-        ['get_unknown_neighbours_file', 'Получить списки неизвестных соседей'],
-        ['get_potential_neighbours_issues', 'Получить возможные ошибки в записях соседей'],
-        ['get_non_ready_neighbours', 'Получить списки не готовых соседей'],
-        ['send_ed_notifications', 'Выслать всем незарегистрированным соседям напоминание зарегистрироваться'],
-        ['parse_address', 'Распарсить почтовый адрес'],
+        ['current_time', 'Возвращает текущее время'],
+        ['test_parking_cleaning', 'Отправляет тестовое уведомление о мытье паркинга на указанную дату'],
     ]
 
     message = encode_markdown(
@@ -2763,7 +2844,7 @@ async def handle_bot_exception(update: Update, context: CallbackContext):
     except Exception:
         request_debug_data = "Failed to prepare request data"
 
-    message = 'В работе бота sal34\_bot возникла ошибка:\n' \
+    message = 'В работе бота sal34\\_bot возникла ошибка:\n' \
               '```\n' + str(encode_markdown(traceback.format_exc())) + '\n```' \
               '\nЗапрос:\n```\n' + request_debug_data + '\n```'
 
@@ -2851,6 +2932,9 @@ def setup_command_handlers(application: Application):
 
     current_time_handler = CommandHandler('current_time', bot_command_current_time)
     application.add_handler(current_time_handler)
+
+    test_parking_cleaning_notification_handler = CommandHandler('test_parking_cleaning', bot_command_test_parking_cleaning_notification)
+    application.add_handler(test_parking_cleaning_notification_handler)
 
     # Other stuff
 
