@@ -42,6 +42,7 @@ TABLES_SYNC_TASK: None or Task = None
 CACHES_STALE_TASK: None or Task = None
 ACTIONS_QUEUE_TASK: None or Task = None
 USERS_CONTEXT_SAVE_TASK: None or Task = None
+SCHEDULED_TASKS_EXECUTION_TASK: None or Task = None
 GOOGLE_CREDENTIALS = None
 TG_BOT_APPLICATION: Application
 TG_BOT: Bot
@@ -55,6 +56,7 @@ CONFIGS = {
 STATS = {}
 
 DB = {}
+PARKING_CLEANING_DB = {}
 
 QUEUED_ACTIONS = []
 
@@ -75,14 +77,12 @@ DF_COLUMNS = [
     'phone',
     'added_to_group',
     'show_phone',
+    'parking_notifications',
     'hidden',
     'deleted',
     'updated',
     'has_other_objects',
     'comments',
-    'notification_address',
-    'notification_index',
-    'email',
     'username',
     'voted',
     'contract_id',
@@ -114,6 +114,7 @@ GROUPS_IDS_EMOJI = {
 TABLES_RELOADED_TIME = 0
 LAST_STALED_USER_CACHE = time.time()
 QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
+LAST_PARKING_CLEANING_NOTIFICATION_DATE = None
 
 HELP_ASSISTANT: HelpAssistant
 
@@ -200,6 +201,9 @@ def admin_chat_only(func):
 def authorized_only(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        # ignore messaged from non-users (e.g. technical stuff)
+        if update.effective_user is None:
+            return
         user = USERS_CACHE.get_user(update)
         if not user.is_identified():
             await bot_send_message_user_not_authorized(update, context)
@@ -211,6 +215,9 @@ def authorized_only(func):
 def ignore_unauthorized(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        # ignore messaged from non-users (e.g. technical stuff)
+        if update.effective_user is None:
+            return
         user = USERS_CACHE.get_user(update)
         if not user.is_identified():
             return
@@ -257,27 +264,20 @@ class User:
             self.hidden = self.db_entries['hidden'].iloc[effective_index] == 'YES'
             self.deleted = self.db_entries['deleted'].iloc[effective_index] == 'YES'
 
+            parking_notifications = self.db_entries['parking_notifications'].iloc[effective_index]
+            if parking_notifications == 'YES':
+                self.parking_notifications = True
+            elif parking_notifications == 'NO':
+                self.parking_notifications = False
+            else:
+                self.parking_notifications = None
+
             phone_number = self.db_entries['phone'].iloc[effective_index]
             if phone_number:
                 self.phone = {
                     'number': phone_number,
                     'visible': self.db_entries['show_phone'].iloc[effective_index] == 'YES'
                 }
-
-            email = self.db_entries['email'].iloc[effective_index]
-            if email:
-                self.email = email
-            else:
-                self.email = None
-
-            address = self.db_entries['notification_address'].iloc[effective_index]
-            if address:
-                self.notification = {
-                    'address': address,
-                    'index': self.db_entries['notification_index'].iloc[effective_index]
-                }
-            else:
-                self.notification = None
 
             self.own_object_types = self.db_entries['object_type'].unique()
 
@@ -1009,6 +1009,22 @@ def reload_tables():
                 lambda x: x.strip() if isinstance(x, str) else x)
             DB[building_number]['user_type'] = DB[building_number]['user_type'].str.lower()
 
+            # PARKING CLEANING
+            spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['parking_cleaning']['id']
+            spreadsheet_range = CONFIGS['buildings'][building_number]['spreadsheet']['parking_cleaning']['range']
+
+            sheet = service.spreadsheets()
+            result = sheet.values().get(spreadsheetId=spreadsheet_id,
+                                        range=spreadsheet_range).execute()
+            rows = result.get('values', [])
+
+            if not rows:
+                logging.error('Syncing tables error PARKING CLEANING: No data')
+                return
+
+            PARKING_CLEANING_DB[building_number] = pd.DataFrame(rows, columns=['date', 'places']).map(
+                lambda x: x.strip() if isinstance(x, str) else x)
+
             # ASSISTANT
             spreadsheet_id = CONFIGS['buildings'][building_number]['spreadsheet']['assistant']['id']
             spreadsheet_range = CONFIGS['buildings'][building_number]['spreadsheet']['assistant']['range']
@@ -1132,6 +1148,25 @@ def stop_actions_queue():
         ACTIONS_QUEUE_TASK = None
 
 
+async def proceed_scheduled_tasks_periodically():
+    while True:
+        await proceed_scheduled_tasks()
+        await asyncio.sleep(1)
+
+
+async def start_scheduled_tasks():
+    global SCHEDULED_TASKS_EXECUTION_TASK
+    if SCHEDULED_TASKS_EXECUTION_TASK is None:
+        SCHEDULED_TASKS_EXECUTION_TASK = asyncio.create_task(proceed_scheduled_tasks_periodically())
+
+
+def stop_scheduled_tasks():
+    global SCHEDULED_TASKS_EXECUTION_TASK
+    if SCHEDULED_TASKS_EXECUTION_TASK is not None:
+        SCHEDULED_TASKS_EXECUTION_TASK.cancel()
+        SCHEDULED_TASKS_EXECUTION_TASK = None
+
+
 async def proceed_users_context_save_periodically():
     while True:
         proceed_users_context_save()
@@ -1182,6 +1217,11 @@ async def proceed_actions_queue():
         QUEUED_ACTIONS_LAST_EXECUTED_TIME = time.time()
 
 
+async def proceed_scheduled_tasks():
+    await execute_parking_cleaning_notifications()
+    # TODO: run other time-specific stuff
+
+
 def proceed_users_context_save():
     interval = CONFIGS['service']['scheduler']['context_save_interval']
     if time.time() - USERS_CACHE.last_save_time > interval:
@@ -1198,14 +1238,15 @@ async def bot_send_message_user_not_authorized(update: Update, context: Callback
 
 
 async def bot_send_message_this_command_bot_not_allowed_here(update: Update, context: CallbackContext):
-    text = f'Эта команда недопустима здесь'
+    text = f'Эту команду нельзя использовать здесь'
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text=text,
                                    reply_to_message_id=update.message.message_id)
 
 
 async def start_identification(update: Update, context: CallbackContext):
-    text = f'Привет\\!\nЧтобы воспользоваться мной и попасть в закрытый чат, необходимо пройти идентификацию.'
+    text = encode_markdown(f'Привет!\nЧтобы воспользоваться мной и попасть в закрытый чат, необходимо пройти '
+                           f'идентификацию.')
     await context.bot.send_message(chat_id=update.effective_chat.id,
                                    text=text, parse_mode='MarkdownV2')
     return
@@ -1564,12 +1605,6 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
 
         text += '\nTG ID: `' + str(requested_user.telegram_id) + '`'
 
-        text += '\nE\-mail: '
-        if requested_user.email:
-            text += encode_markdown(requested_user.email)
-        else:
-            text += 'Нет'
-
         text += '\nДобавить в группу: '
         if requested_user.add_to_group:
             text += 'Да'
@@ -1581,6 +1616,14 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
             text += 'Скрыт'
         else:
             text += 'Виден'
+
+        text += '\nУведомление паркинга: '
+        if requested_user.parking_notifications is None:
+            text += 'Авто'
+        elif requested_user.parking_notifications:
+            text += 'Разрешено'
+        else:
+            text += 'Запрещено'
 
         status_str, added_everywhere = await requested_user.get_str_user_related_groups_status()
         text += '\n\n' + status_str
@@ -1673,6 +1716,80 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
                                    reply_to_message_id=reply_to_message_id,
                                    parse_mode='MarkdownV2',
                                    reply_markup=reply_markup)
+
+
+async def prepare_parking_cleaning_notification_text(building_number) -> str or None:
+    current_date = datetime.datetime.now()
+    next_day = current_date + datetime.timedelta(days=1)
+    formatted_date = next_day.strftime("%d.%m.%Y")
+
+    df = PARKING_CLEANING_DB[building_number]
+    search = df[df["date"] == formatted_date]
+    if search.empty:
+        return None
+
+    places_raw = search.iloc[0]["places"]
+    places = []
+
+    for part in places_raw.split(";"):
+        part = part.strip()
+        if "-" in part:
+            start, end = map(int, part.split("-"))
+            places.extend(range(start, end + 1))
+        else:
+            places.append(int(part))
+
+    text = f"Завтра {encode_markdown(formatted_date)} запланирована уборка следующих машиномест:"
+    for place in places:
+        text += f"\n\\- {place}"
+        place_data = get_object_persons(building_number, "мм", str(place))
+        user_type_already_found = False
+        for users_type in ['rents', 'residents', 'owners']:
+            if len(place_data[users_type]) > 0:
+                for user in place_data[users_type]:
+                    if (not user_type_already_found and user.parking_notifications is None) or user.parking_notifications is True:
+                        text += f" {user.get_linked_shortname()}"
+                user_type_already_found = True
+
+    return text
+
+
+async def execute_parking_cleaning_notifications():
+    global LAST_PARKING_CLEANING_NOTIFICATION_DATE
+
+    current_date = datetime.datetime.now()
+    formatted_current_date = current_date.strftime("%d.%m.%Y")
+
+    if LAST_PARKING_CLEANING_NOTIFICATION_DATE == formatted_current_date:
+        return
+
+    if current_date.hour != 20 or current_date.minute != 30:
+        return
+
+    for building_number, _ in PARKING_CLEANING_DB.items():
+        text = await prepare_parking_cleaning_notification_text(building_number)
+        if text is not None:
+            for chat in CONFIGS['buildings'][str(building_number)]['groups']:
+                if chat['name'] == 'private_section_group' and chat['section'] == 'p':
+                    await TG_BOT.send_message(chat_id=chat['id'], text=text, parse_mode='MarkdownV2')
+
+    LAST_PARKING_CLEANING_NOTIFICATION_DATE = formatted_current_date
+
+
+@authorized_only
+@admin_chat_only
+async def bot_command_test_parking_cleaning_notification(update: Update, context: CallbackContext):
+    is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
+        = identify_chat_by_tg_update(update)
+
+    text = await prepare_parking_cleaning_notification_text(chat_building)
+    if text is None:
+        text = 'Уведомление отсутствует'
+
+    await context.bot.send_message(chat_id=update.effective_chat.id,
+                                   text=text,
+                                   reply_to_message_id=update.message.message_id,
+                                   parse_mode='MarkdownV2')
 
 
 @authorized_only
@@ -1808,11 +1925,8 @@ async def bot_command_help(update: Update, context: CallbackContext):
         ['add_all_users_to_chats', 'Принудительно добавляет всех пользователей в соответствующие им чаты'],
         ['add_all_users_to_chat', 'Принудительно добавляет всех пользователей в заданный чат'],
         ['revalidate_users_groups', 'Ревалидирует наличие пользователя в группах'],
-        ['get_unknown_neighbours_file', 'Получить списки неизвестных соседей'],
-        ['get_potential_neighbours_issues', 'Получить возможные ошибки в записях соседей'],
-        ['get_non_ready_neighbours', 'Получить списки не готовых соседей'],
-        ['send_ed_notifications', 'Выслать всем незарегистрированным соседям напоминание зарегистрироваться'],
-        ['parse_address', 'Распарсить почтовый адрес'],
+        ['current_time', 'Возвращает текущее время'],
+        ['test_parking_cleaning', 'Отправляет тестовое уведомление о мытье паркинга на указанную дату'],
     ]
 
     message = encode_markdown(
@@ -2164,6 +2278,10 @@ def raw_try_setup_garbage_deletion(update: Update, context: CallbackContext) -> 
 
 
 async def stats_collector(update: Update, context: CallbackContext):
+    # ignore when messages are not from the user (some other technical stuff)
+    if update.effective_user is None:
+        return False
+
     user = USERS_CACHE.get_user(update)
     chat_id = update.effective_chat.id
 
@@ -2223,6 +2341,9 @@ async def bot_added_user_handler(update: Update, context: CallbackContext):
 
 
 async def no_command_handler(update: Update, context: CallbackContext) -> None:
+    if not update.message:
+        return
+
     is_found_chat, chat_building, is_admin_chat, chat_name, chat_section, building_chats \
         = identify_chat_by_tg_update(update)
 
@@ -2720,9 +2841,14 @@ def get_admin_group_id() -> int:
 
 
 async def handle_bot_exception(update: Update, context: CallbackContext):
-    message = 'В работе бота sal34\_bot возникла ошибка:\n' \
+    try:
+        request_debug_data = encode_markdown(prepare_debug_data(update, context))
+    except Exception:
+        request_debug_data = "Failed to prepare request data"
+
+    message = 'В работе бота sal34\\_bot возникла ошибка:\n' \
               '```\n' + str(encode_markdown(traceback.format_exc())) + '\n```' \
-              '\nЗапрос:\n```\n' + encode_markdown(prepare_debug_data(update, context)) + '\n```'
+              '\nЗапрос:\n```\n' + request_debug_data + '\n```'
 
     group_id = get_admin_group_id()
     await TG_BOT.send_message(chat_id=group_id, text=message, parse_mode='MarkdownV2')
@@ -2809,6 +2935,9 @@ def setup_command_handlers(application: Application):
     current_time_handler = CommandHandler('current_time', bot_command_current_time)
     application.add_handler(current_time_handler)
 
+    test_parking_cleaning_notification_handler = CommandHandler('test_parking_cleaning', bot_command_test_parking_cleaning_notification)
+    application.add_handler(test_parking_cleaning_notification_handler)
+
     # Other stuff
 
     application.add_handler(MessageHandler(filters.TEXT |
@@ -2889,6 +3018,7 @@ async def main():
         await connect_google_service()
         await start_tables_synchronization()
         await start_caches_stale()
+        await start_scheduled_tasks()
         await serve_telegram_requests()
 
         logging.info('Bot started')
