@@ -77,14 +77,12 @@ DF_COLUMNS = [
     'phone',
     'added_to_group',
     'show_phone',
+    'parking_notifications',
     'hidden',
     'deleted',
     'updated',
     'has_other_objects',
     'comments',
-    'notification_address',
-    'notification_index',
-    'email',
     'username',
     'voted',
     'contract_id',
@@ -266,27 +264,20 @@ class User:
             self.hidden = self.db_entries['hidden'].iloc[effective_index] == 'YES'
             self.deleted = self.db_entries['deleted'].iloc[effective_index] == 'YES'
 
+            parking_notifications = self.db_entries['parking_notifications'].iloc[effective_index]
+            if parking_notifications == 'YES':
+                self.parking_notifications = True
+            elif parking_notifications == 'NO':
+                self.parking_notifications = False
+            else:
+                self.parking_notifications = None
+
             phone_number = self.db_entries['phone'].iloc[effective_index]
             if phone_number:
                 self.phone = {
                     'number': phone_number,
                     'visible': self.db_entries['show_phone'].iloc[effective_index] == 'YES'
                 }
-
-            email = self.db_entries['email'].iloc[effective_index]
-            if email:
-                self.email = email
-            else:
-                self.email = None
-
-            address = self.db_entries['notification_address'].iloc[effective_index]
-            if address:
-                self.notification = {
-                    'address': address,
-                    'index': self.db_entries['notification_index'].iloc[effective_index]
-                }
-            else:
-                self.notification = None
 
             self.own_object_types = self.db_entries['object_type'].unique()
 
@@ -1614,12 +1605,6 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
 
         text += '\nTG ID: `' + str(requested_user.telegram_id) + '`'
 
-        text += '\nE\\-mail: '
-        if requested_user.email:
-            text += encode_markdown(requested_user.email)
-        else:
-            text += 'Нет'
-
         text += '\nДобавить в группу: '
         if requested_user.add_to_group:
             text += 'Да'
@@ -1631,6 +1616,14 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
             text += 'Скрыт'
         else:
             text += 'Виден'
+
+        text += '\nУведомление паркинга: '
+        if requested_user.parking_notifications is None:
+            text += 'Авто'
+        elif requested_user.parking_notifications:
+            text += 'Разрешено'
+        else:
+            text += 'Запрещено'
 
         status_str, added_everywhere = await requested_user.get_str_user_related_groups_status()
         text += '\n\n' + status_str
@@ -1746,15 +1739,17 @@ async def prepare_parking_cleaning_notification_text(building_number) -> str or 
         else:
             places.append(int(part))
 
-    neighbours = USERS_CACHE.get_neighbours_from_section(building_number, "p")
-
     text = f"Завтра {encode_markdown(formatted_date)} запланирована уборка следующих машиномест:"
     for place in places:
         text += f"\n\\- {place}"
-        place_data = neighbours['-1'].get(place)
-        for user in place_data['users']:
-            if isinstance(user, User):
-                text += f" {user.get_linked_shortname()}"
+        place_data = get_object_persons(building_number, "мм", str(place))
+        user_type_already_found = False
+        for users_type in ['rents', 'residents', 'owners']:
+            if len(place_data[users_type]) > 0:
+                for user in place_data[users_type]:
+                    if (not user_type_already_found and user.parking_notifications is None) or user.parking_notifications is True:
+                        text += f" {user.get_linked_shortname()}"
+                user_type_already_found = True
 
     return text
 
