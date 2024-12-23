@@ -1727,10 +1727,11 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
 
 async def prepare_parking_cleaning_notification_text(building_number) -> str or None:
     current_date = datetime.datetime.now()
-    formatted_current_date = current_date.strftime("%d.%m.%Y")
+    next_day = current_date + datetime.timedelta(days=1)
+    formatted_date = next_day.strftime("%d.%m.%Y")
 
     df = PARKING_CLEANING_DB[building_number]
-    search = df[df["date"] == formatted_current_date]
+    search = df[df["date"] == formatted_date]
     if search.empty:
         return None
 
@@ -1745,9 +1746,15 @@ async def prepare_parking_cleaning_notification_text(building_number) -> str or 
         else:
             places.append(int(part))
 
-    text = "Сегодня запланирована уборка следующих машиномест:"
+    neighbours = USERS_CACHE.get_neighbours_from_section(building_number, "p")
+
+    text = f"Завтра {encode_markdown(formatted_date)} запланирована уборка следующих машиномест:"
     for place in places:
         text += f"\n\\- {place}"
+        place_data = neighbours['-1'].get(place)
+        for user in place_data['users']:
+            if isinstance(user, User):
+                text += f" {user.get_linked_shortname()}"
 
     return text
 
@@ -1761,7 +1768,7 @@ async def execute_parking_cleaning_notifications():
     if LAST_PARKING_CLEANING_NOTIFICATION_DATE == formatted_current_date:
         return
 
-    if current_date.hour != 8 or current_date.minute < 30:
+    if current_date.hour != 20 or current_date.minute != 30:
         return
 
     for building_number, _ in PARKING_CLEANING_DB.items():
