@@ -9,3 +9,4 @@ telethon==1.38.1
 cython==0.29.33
 numpy==2.2.0
 pandas==2.2.3
+pytz

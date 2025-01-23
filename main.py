@@ -7,6 +7,7 @@ import math
 import os.path
 import time
 import traceback
+import pytz
 from asyncio import Task
 from typing import Dict, List, Any
 from functools import wraps
@@ -1757,7 +1758,7 @@ async def prepare_parking_cleaning_notification_text(building_number) -> str or 
 async def execute_parking_cleaning_notifications():
     global LAST_PARKING_CLEANING_NOTIFICATION_DATE
 
-    current_date = datetime.datetime.now()
+    current_date = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
     formatted_current_date = current_date.strftime("%d.%m.%Y")
 
     if LAST_PARKING_CLEANING_NOTIFICATION_DATE == formatted_current_date:
