@@ -24,7 +24,7 @@ from pandas import DataFrame
 from telegram.ext import MessageHandler, CallbackContext, CommandHandler, \
     CallbackQueryHandler, ApplicationBuilder, Application, filters
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, \
-    InlineKeyboardButton, Bot, ForceReply, ChatMember
+    InlineKeyboardButton, Bot, ForceReply, ChatMember, MessageOriginHiddenUser
 import telegram.helpers
 
 import logging
@@ -1552,7 +1552,14 @@ async def bot_command_who_is_this(update: Update, context: CallbackContext):
     elif update.message.reply_to_message.contact:
         requested_user_id = update.message.reply_to_message.contact.user_id
     elif update.message.reply_to_message.forward_origin:
-        requested_user_id = update.message.reply_to_message.forward_origin.sender_user.id
+        if isinstance(update.message.reply_to_message.forward_origin, MessageOriginHiddenUser):
+            await context.bot.send_message(chat_id=update.effective_chat.id,
+                                           text='Скрытый пользователь',
+                                           reply_to_message_id=update.message.reply_to_message.message_id,
+                                           parse_mode='MarkdownV2')
+            return
+        else:
+            requested_user_id = update.message.reply_to_message.forward_origin.sender_user.id
     else:
         requested_user_id = update.message.reply_to_message.from_user.id
 
